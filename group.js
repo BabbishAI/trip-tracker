@@ -311,8 +311,10 @@ function buildItemRow(item) {
   if (canEdit()) {
     const tools = document.createElement("div");
     tools.className = "v-tools";
+    tools.appendChild(buildEditButton(item));
     tools.appendChild(buildRemoveButton(item));
     main.appendChild(tools);
+    if (editingId === item.id) main.appendChild(buildEditPanel(item));
   }
   row.append(control, main, cost);
   return row;
@@ -973,4 +975,176 @@ function buildShareReadout(item) {
   d.className = "v-split";
   d.innerHTML = parts.join("");
   return d;
+}
+
+// --- Per-item editing -----------------------------------------------------
+// Everything about one booking, editable in place. The group view is where the
+// families actually live, so it has to hold the whole record — not just the parts
+// that were cheap to expose.
+
+// Which row is open. Module-level because every edit re-renders the page, and the
+// panel has to still be there afterwards.
+let editingId = "";
+
+// Fields commit on change (blur), never on keystroke: a re-render mid-typing would
+// take the keyboard away, which on a phone means losing the entry.
+function commitEdit(fn) {
+  return function () {
+    fn();
+    saveSoon();
+    render();
+  };
+}
+
+function edField(labelText, el, hint) {
+  const lab = document.createElement("label");
+  lab.className = "ed-field";
+  const span = document.createElement("span");
+  span.className = "ed-lab";
+  span.textContent = labelText;
+  lab.append(span, el);
+  if (hint) {
+    const h = document.createElement("span");
+    h.className = "ed-hint";
+    h.textContent = hint;
+    lab.appendChild(h);
+  }
+  return lab;
+}
+
+function edInput(type, value, placeholder) {
+  const el = document.createElement("input");
+  el.type = type;
+  el.value = value == null ? "" : value;
+  if (placeholder) el.placeholder = placeholder;
+  if (type === "number") { el.min = "0"; el.step = "0.01"; }
+  return el;
+}
+
+function edSelect(options, selected) {
+  const el = document.createElement("select");
+  for (const o of options) {
+    const opt = document.createElement("option");
+    opt.value = o.value;
+    opt.textContent = o.label;
+    opt.selected = o.value === selected;
+    el.appendChild(opt);
+  }
+  return el;
+}
+
+function buildEditPanel(item) {
+  const p = document.createElement("div");
+  p.className = "ed-panel";
+
+  // --- What it is -------------------------------------------------------
+  const title = edInput("text", item.title);
+  title.addEventListener("change", commitEdit(function () {
+    const v = title.value.trim();
+    if (v) item.title = v;   // an empty title would render an unclickable blank row
+  }));
+
+  const kind = edSelect(ADD_TYPES.map(function (t) {
+    return { value: t, label: (TYPES[t] || TYPES.other).label };
+  }), item.type);
+  kind.addEventListener("change", commitEdit(function () { item.type = kind.value; }));
+
+  // --- When, which is also where it appears in the list ------------------
+  const start = edInput("date", item.date);
+  start.addEventListener("change", commitEdit(function () { item.date = start.value; }));
+  const end = edInput("date", item.endDate);
+  end.addEventListener("change", commitEdit(function () { item.endDate = end.value; }));
+
+  // --- Money ------------------------------------------------------------
+  const est = edInput("number", item.cost, "0.00");
+  est.addEventListener("change", commitEdit(function () {
+    item.cost = Math.max(0, parseFloat(est.value) || 0);
+  }));
+
+  const actual = edInput("number", Booking.hasActual(item) ? item.actual : "", "not charged yet");
+  actual.addEventListener("change", commitEdit(function () {
+    const raw = actual.value.trim();
+    item.actual = raw === "" ? null : Math.max(0, parseFloat(raw) || 0);
+    // A real charge means it is no longer a guess. Nudge the status rather than
+    // leaving a line that reads "Estimate" next to money that has actually moved.
+    if (item.actual !== null && Booking.statusOf(item) === "est") item.status = "booked";
+  }));
+
+  const mode = edSelect(Booking.PRICE_ORDER.map(function (k) {
+    return { value: k, label: Booking.PRICE_MODES[k].label };
+  }), Booking.priceMode(item));
+  mode.addEventListener("change", commitEdit(function () { item.priceMode = mode.value; }));
+
+  // --- Where it stands ---------------------------------------------------
+  const status = edSelect(Booking.STATUS_ORDER.map(function (k) {
+    return { value: k, label: Booking.STATUS[k].label };
+  }), Booking.statusOf(item));
+  status.addEventListener("change", commitEdit(function () { item.status = status.value; }));
+
+  const payerOpts = [{ value: "", label: "Nobody yet — still owed to the vendor" }];
+  for (const h of Booking.households(plan)) payerOpts.push({ value: h.id, label: h.name });
+  const payer = edSelect(payerOpts, item.payer || "");
+  payer.addEventListener("change", commitEdit(function () { item.payer = payer.value; }));
+
+  // --- Reference ---------------------------------------------------------
+  const conf = edInput("text", item.conf, "e.g. ABC123");
+  conf.addEventListener("change", commitEdit(function () { item.conf = conf.value.trim(); }));
+
+  const vendor = edInput("text", item.vendor, "e.g. JetBlue, Airbnb");
+  vendor.addEventListener("change", commitEdit(function () { item.vendor = vendor.value.trim(); }));
+
+  const notes = document.createElement("textarea");
+  notes.rows = 3;
+  notes.value = item.notes || "";
+  notes.placeholder = "Address, door code, why you picked it…";
+  notes.addEventListener("change", commitEdit(function () { item.notes = notes.value.trim(); }));
+
+  const grid = document.createElement("div");
+  grid.className = "ed-grid";
+  grid.append(
+    edField("Name", title),
+    edField("Kind", kind),
+    edField("Starts", start, "The date sets where this sits in the list"),
+    edField("Ends", end, "Leave blank for a single day"),
+    edField("Estimate", est, "What you expected it to cost"),
+    edField("Actually charged", actual, "Leave blank until the money moves"),
+    edField("That price is", mode, Booking.PRICE_MODES[Booking.priceMode(item)].hint),
+    edField("Status", status),
+    edField("Paid by", payer, "Only a paid-by family gets money back at settle-up"),
+    edField("Confirmation number", conf),
+    edField("Booked with", vendor)
+  );
+
+  const notesField = edField("Notes", notes);
+  notesField.classList.add("ed-wide");
+  grid.appendChild(notesField);
+
+  p.appendChild(grid);
+
+  const foot = document.createElement("div");
+  foot.className = "ed-foot";
+  const done = document.createElement("button");
+  done.type = "button";
+  done.className = "ed-done";
+  done.textContent = "Done";
+  done.addEventListener("click", function () { editingId = ""; render(); });
+  const note = document.createElement("span");
+  note.className = "ed-footnote";
+  note.textContent = "Changes save as you go, for all four families.";
+  foot.append(done, note);
+  p.appendChild(foot);
+
+  return p;
+}
+
+function buildEditButton(item) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "v-edit" + (editingId === item.id ? " open" : "");
+  btn.textContent = editingId === item.id ? "Close" : "Edit";
+  btn.addEventListener("click", function () {
+    editingId = editingId === item.id ? "" : item.id;
+    render();
+  });
+  return btn;
 }
