@@ -73,7 +73,13 @@ function readPayload() {
 let plan = null;      // decoded payload: { title, items, households, splitBasis, groupSel, groupOff }
 let planId = "";      // the ?id= of a cloud plan, used to scope this viewer's own settings
 let vSel = {};        // group name -> chosen item id, or "" for none
-let vInc = {};        // optional item id -> included (bool)
+// Whether an item counts toward the trip. Every item can be switched off without
+// being deleted — the group decides against something but keeps the price, the
+// confirmation number and the notes on the page. Unset means in, so nothing written
+// before this field existed changes.
+function isIncluded(item) {
+  return !item || item.included !== false;
+}
 
 function groupNames() {
   const seen = [];
@@ -101,7 +107,6 @@ function initSelections() {
     }
   }
   for (const it of plan.items) {
-    if (!it.group && it.optional) vInc[it.id] = it.included !== false;
   }
 }
 
@@ -114,8 +119,7 @@ function computeTotal() {
   let total = 0;
   for (const it of plan.items) {
     if (it.group) continue; // groups handled below
-    if (it.optional) { if (vInc[it.id]) total += Booking.effCost(plan, it); }
-    else total += Booking.effCost(plan, it);
+    if (isIncluded(it)) total += Booking.effCost(plan, it);
   }
   for (const name of groupNames()) {
     if (vSel[name]) total += costOf(vSel[name]);
@@ -257,30 +261,30 @@ function fallbackCopy(text, done) {
 
 function buildItemRow(item) {
   const meta = TYPES[item.type] || TYPES.other;
-  const included = !item.optional || vInc[item.id];
+  const included = isIncluded(item);
   const row = document.createElement("div");
   row.className = "v-row" + (included ? "" : " excluded");
 
-  let control;
-  if (item.optional) {
-    control = document.createElement("input");
-    control.type = "checkbox";
-    control.className = "v-check";
-    control.checked = !!vInc[item.id];
-    control.title = "Include this in your total";
-    control.addEventListener("change", () => { vInc[item.id] = control.checked; render(); });
-  } else {
-    control = document.createElement("span");
-    control.className = "v-fixed";
-    control.textContent = "•";
-  }
-
+  // Every item gets the switch, not just the ones flagged optional. Deciding against
+  // something and deleting it are different acts: the first should keep the record.
+  const control = document.createElement("input");
+  control.type = "checkbox";
+  control.className = "v-check";
+  control.checked = included;
+  control.title = included
+    ? "Counting toward the trip — untick to drop it without deleting it"
+    : "Not counting toward the trip — tick to put it back";
+  control.addEventListener("change", function () {
+    item.included = control.checked;
+    saveSoon(item.id);
+    render();
+  });
   const main = document.createElement("div");
   const dateText = fmtDateRange(item.date, item.endDate);
   const sub = [meta.label];
   if (dateText) sub.push(dateText);
   if (item.people) sub.push(`for ${item.people}`);
-  if (item.optional) sub.push("optional");
+  if (!isIncluded(item)) sub.push("not doing this");
   main.innerHTML =
     `<span class="v-title"><span class="v-icon">${meta.icon}</span>${escapeHTML(item.title)}</span>` +
     `<span class="v-sub">${sub.join(" · ")}</span>`;
@@ -418,8 +422,7 @@ function countedItems() {
   const out = [];
   for (const it of plan.items) {
     if (it.group) { if (vSel[it.group] === it.id) out.push(it); }
-    else if (it.optional) { if (vInc[it.id]) out.push(it); }
-    else out.push(it);
+    else if (isIncluded(it)) out.push(it);
   }
   return out;
 }
@@ -717,7 +720,70 @@ function currentPayload() {
   };
 }
 
+// Which parts of the plan this browser has changed since its last successful save.
+// A save writes the whole document, so without this a page that loaded ten minutes
+// ago would push its stale copy over everything anyone else has done since — the
+// change disappears with no error, which is the worst way to lose a number in a
+// ledger fourteen people are relying on.
+let dirtyItems = new Set();   // item ids touched here (including ones deleted here)
+let dirtyStructure = false;   // title, roster, split basis, choice-group selections
+
+function markItem(id) {
+  if (id) dirtyItems.add(id);
+}
+function markStructure() {
+  dirtyStructure = true;
+}
+
+// Fold this browser's changes into whatever is stored right now, rather than
+// replacing it. Two people editing different items no longer overwrite each other;
+// two people editing the SAME item still resolve last-write-wins, which is honest
+// and rare enough to live with.
+function mergeInto(stored) {
+  const base = stored && Array.isArray(stored.items)
+    ? JSON.parse(JSON.stringify(stored))
+    : currentPayload();
+
+  const mine = {};
+  for (const it of plan.items) mine[it.id] = it;
+
+  for (const id of dirtyItems) {
+    const localItem = mine[id];
+    const at = base.items.findIndex(function (x) { return x.id === id; });
+    if (!localItem) {
+      // Deleted here. Drop it from the stored copy too.
+      if (at >= 0) base.items.splice(at, 1);
+    } else if (at >= 0) {
+      base.items[at] = JSON.parse(JSON.stringify(localItem));
+    } else {
+      base.items.push(JSON.parse(JSON.stringify(localItem)));
+    }
+  }
+
+  if (dirtyStructure) {
+    base.title = plan.title;
+    base.households = plan.households;
+    base.splitBasis = plan.splitBasis;
+    base.groupSel = plan.groupSel;
+    base.groupOff = plan.groupOff;
+  }
+  base.v = 2;
+  return base;
+}
+
 async function cloudSave() {
+  // Read the current stored copy first so other people's edits survive this write.
+  let stored = null;
+  try {
+    stored = await cloudFetch(planId);
+  } catch (e) {
+    // Could not read. Writing our whole copy now could silently revert someone;
+    // better to fail and say so than to destroy a change we cannot see.
+    throw new Error("could not read the current plan before saving");
+  }
+
+  const merged = mergeInto(stored);
+
   const res = await fetch(SUPABASE.url + "/rpc/save_plan", {
     method: "POST",
     headers: {
@@ -725,9 +791,32 @@ async function cloudSave() {
       "Authorization": "Bearer " + SUPABASE.anon,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ pid: planId, payload: currentPayload() }),
+    body: JSON.stringify({ pid: planId, payload: merged }),
   });
   if (!res.ok) throw new Error("save failed: " + res.status);
+
+  // Adopt the merged result so this page now shows everyone else's changes too.
+  const hadOthers = stored && JSON.stringify(stored) !== JSON.stringify(merged);
+  plan = merged;
+  dirtyItems = new Set();
+  dirtyStructure = false;
+  return hadOthers;
+}
+
+function saveSoon(itemId) {
+  if (!canEdit()) return;
+  if (itemId) markItem(itemId); else markStructure();
+  setSaveState("Saving…", "pending");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async function () {
+    try {
+      await cloudSave();
+      setSaveState("Saved for everyone", "ok");
+      render();
+    } catch (e) {
+      setSaveState("NOT SAVED — " + e.message + ". Your change is still on screen; try again.", "bad");
+    }
+  }, 700);
 }
 
 function setSaveState(text, cls) {
@@ -747,31 +836,17 @@ function paintSaveState() {
 
 // Coalesce rapid edits into one write. A failed save has to be loud: otherwise the
 // person makes a change, walks away, and assumes the group can see it.
-function saveSoon() {
-  if (!canEdit()) return;
-  setSaveState("Saving…", "pending");
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    try {
-      await cloudSave();
-      setSaveState("Saved for everyone", "ok");
-    } catch (e) {
-      setSaveState("NOT SAVED — check your connection and try again", "bad");
-    }
-  }, 700);
-}
 
 // Drop an item and repair any viewer selections that pointed at it.
 function deleteItem(item) {
   plan.items = plan.items.filter(function (x) { return x.id !== item.id; });
-  delete vInc[item.id];
   for (const name of Object.keys(vSel)) {
     if (vSel[name] === item.id) {
       const left = groupMembers(name);
       vSel[name] = left.length ? left[0].id : "";
     }
   }
-  saveSoon();
+  saveSoon(item.id);
   render();
 }
 
@@ -791,7 +866,7 @@ function toggleShare(item, hid) {
     cur = cur.concat([hid]);
   }
   item.shares = cur.length === all.length ? [] : cur;
-  saveSoon();
+  saveSoon(item.id);
   render();
 }
 
@@ -818,7 +893,7 @@ function addItem(fields) {
     shares: Array.isArray(fields.shares) ? fields.shares : [],
   };
   plan.items.push(item);
-  saveSoon();
+  saveSoon(item.id);
   render();
 }
 
@@ -995,7 +1070,8 @@ let editingId = "";
 function commitEdit(fn) {
   return function () {
     fn();
-    saveSoon();
+    // Panel edits always act on the row that is open.
+    saveSoon(editingId);
     render();
   };
 }

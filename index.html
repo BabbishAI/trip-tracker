@@ -36,7 +36,10 @@
       align-items: center; padding: 10px 4px; border-bottom: 1px solid var(--border);
     }
     .v-row:last-child { border-bottom: none; }
-    .v-row.excluded { opacity: 0.45; }
+    .v-row.excluded { opacity: 0.5; }
+    .v-row.excluded .v-title { text-decoration: line-through; }
+    .v-row.excluded .v-cost { text-decoration: line-through; }
+    .v-check { transform: scale(1.25); }
     .v-check { width: auto; margin: 0; cursor: pointer; }
     .v-fixed { width: 18px; text-align: center; color: var(--muted); }
     .v-title { font-weight: 500; }
@@ -303,6 +306,6 @@
   </div>
   <script src="config.js?v=2"></script>
   <script src="booking.js?v=5"></script>
-  <script src="group.js?v=4"></script>
+  <script src="group.js?v=6"></script>
 </body>
 </html>
