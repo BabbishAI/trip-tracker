@@ -537,6 +537,11 @@ function buildYouPanel() {
     panel.appendChild(det);
   }
 
+  if (isContributor(me)) {
+    const gift = buildGiftSection(me);
+    if (gift) panel.appendChild(gift);
+  }
+
   const basis = Booking.SPLIT_BASES[Booking.splitBasis(plan)];
   if (basis) {
     const note = document.createElement("div");
@@ -646,8 +651,6 @@ function render() {
   const ledger = buildLedgerPanel();
   if (ledger) root.appendChild(ledger);
 
-  const gift = buildGiftPanel();
-  if (gift) root.appendChild(gift);
 }
 
 function renderEmpty() {
@@ -1386,26 +1389,32 @@ function buildCategoryPanel() {
   return panel;
 }
 
-// --- "What if someone chips in" -------------------------------------------
-// One household offering to carry more than its share is a normal thing on a family
-// trip, and the question is always the same: if we put in X, what does that actually
-// do for everyone else?
+// --- "What if we chip in" -------------------------------------------------
+// Lives inside the viewer's own "Your share" panel, and only for a household marked
+// as contributing. It is a private question — what could we afford to take on? — and
+// it belongs next to that family's own numbers rather than as a section of the
+// itinerary aimed at everybody.
 //
-// The number entered is the TOTAL that household is paying toward the trip, not an
-// extra on top of their share. Saying "we'll put in nine thousand" means their bill
-// is nine thousand — the contribution is whatever part of that is above what they
-// owed anyway. Treating it as an addition made their own share invisible and
-// overstated what the offer was worth.
+// The number entered is the TOTAL that household pays toward the trip, not an extra
+// on top of their share. Saying "we'll put in nine thousand" means their bill is nine
+// thousand; the contribution is whatever part of that sits above what they owed
+// anyway.
 //
-// This is the one control on the page that does NOT write to the shared plan. Working
-// out what you can afford is not a decision yet, and nobody should have to broadcast a
-// half-formed offer to thirteen other people while they think about it. Nothing here
-// is saved, and nothing here is visible to anyone else.
+// Nothing here is saved and nothing is visible to anyone else. Working out what you
+// can afford is not a decision yet, and nobody should have to broadcast a half-formed
+// offer to thirteen other people while they think about it.
 
-let giftFrom = "";     // household id considering paying more
-let giftTotal = null;  // what they would pay in total; null = not set yet
+let giftTotal = null;  // what the viewer's household would pay in total; null = unset
 
-// What each household owes before anyone offers anything.
+// A household is offered this tool only when the group has marked them as chipping
+// in. A flag rather than a hard-coded family name: the grandparents are the ones
+// funding this trip, but the next trip will be somebody else, and a name buried in
+// the code would quietly stop matching the day anyone edits the roster.
+function isContributor(hid) {
+  const h = Booking.householdById(plan, hid);
+  return !!(h && h.contributes);
+}
+
 function baseOwed() {
   const base = {};
   for (const r of Booking.ledger(plan, countedItems())) base[r.id] = r.owes;
@@ -1413,23 +1422,18 @@ function baseOwed() {
 }
 
 // The contribution is spread across the other households by the trip's own split
-// basis, so help lands the way the costs did — a family carrying more of the trip
-// gets more of the relief.
+// basis, so help lands the way the costs did.
 //
 // Nobody is reduced below zero: money beyond what the others owe between them has
-// nothing left to pay off, so it is reported as unused rather than quietly vanishing
-// or turning into a negative bill.
-//
-// The reverse is modelled too. Paying in less than your own share does not make the
-// money disappear; the others have to cover it, and the table says so rather than
-// pretending a shortfall is free.
+// nothing left to pay off, so it is reported as unused. The reverse is modelled too —
+// paying in less than your own share does not make the money disappear, the others
+// have to cover it, and the table says so.
 function giftPreview(fromId, totalPaid) {
   const base = baseOwed();
   const baseline = base[fromId] || 0;
   const contribution = totalPaid - baseline;
 
-  const houses = Booking.households(plan);
-  const others = houses.filter(function (h) { return h.id !== fromId; });
+  const others = Booking.households(plan).filter(function (h) { return h.id !== fromId; });
   const totalWeight = others.reduce(function (n, h) { return n + Booking.weightOf(plan, h); }, 0);
   function portionFor(h, amount) {
     return totalWeight > 0
@@ -1448,20 +1452,18 @@ function giftPreview(fromId, totalPaid) {
       rows.push({ name: h.name, before: owed, after: owed - cut, change: -cut });
     }
   } else {
-    const short = -contribution;
     for (const h of others) {
       const owed = base[h.id] || 0;
-      const add = portionFor(h, short);
+      const add = portionFor(h, -contribution);
       moved -= add;
       rows.push({ name: h.name, before: owed, after: owed + add, change: add });
     }
   }
 
-  const giverAfter = baseline + moved;
   rows.unshift({
     name: Booking.householdName(plan, fromId),
     before: baseline,
-    after: giverAfter,
+    after: baseline + moved,
     change: moved,
     giver: true,
   });
@@ -1470,32 +1472,26 @@ function giftPreview(fromId, totalPaid) {
     rows: rows,
     baseline: baseline,
     contribution: contribution,
-    applied: moved,
     unused: contribution > 0 ? Math.max(0, contribution - moved) : 0,
     shortfall: contribution < 0 ? -contribution : 0,
   };
 }
 
-function renderGiftTable(box) {
-  if (!giftFrom) {
-    box.innerHTML = '<div class="gift-empty">Pick who is chipping in.</div>';
-    return;
-  }
-  const base = baseOwed();
-  const baseline = base[giftFrom] || 0;
+function renderGiftTable(box, hid) {
+  const baseline = baseOwed()[hid] || 0;
   const total = giftTotal === null ? baseline : Math.max(0, giftTotal);
-  const p = giftPreview(giftFrom, total);
+  const p = giftPreview(hid, total);
 
-  let head = "";
+  let head;
   if (p.contribution >= 1) {
-    head = '<div class="gift-head">Their share is <strong>' + fmtUSD(Math.round(p.baseline)) +
+    head = '<div class="gift-head">Your share is <strong>' + fmtUSD(Math.round(p.baseline)) +
       "</strong>, so paying <strong>" + fmtUSD(Math.round(total)) + "</strong> contributes <strong>" +
       fmtUSD(Math.round(p.contribution)) + "</strong> toward the other families.</div>";
   } else if (p.shortfall >= 1) {
     head = '<div class="gift-head warn">That is <strong>' + fmtUSD(Math.round(p.shortfall)) +
-      "</strong> less than their own share, so the other families have to cover the difference.</div>";
+      "</strong> less than your own share, so the other families have to cover the difference.</div>";
   } else {
-    head = '<div class="gift-head">That is exactly their own share — nothing changes for anyone else.</div>';
+    head = '<div class="gift-head">That is exactly your own share — nothing changes for anyone else.</div>';
   }
 
   let html = head + '<table class="gift-table"><thead><tr><th>Family</th><th class="n">Now</th>' +
@@ -1506,7 +1502,7 @@ function renderGiftTable(box) {
         (r.change > 0 ? "+" : "−") + fmtUSD(Math.round(Math.abs(r.change))) + "</span>"
       : "";
     html += '<tr class="' + (r.giver ? "giver" : "") + '"><td>' + escapeHTML(r.name) +
-      (r.giver ? ' <span class="gift-tag">paying this</span>' : "") +
+      (r.giver ? ' <span class="gift-tag">you</span>' : "") +
       '</td><td class="n">' + fmtUSD(Math.round(r.before)) + "</td>" +
       '<td class="n">' + fmtUSD(Math.round(r.after)) + delta + "</td></tr>";
   }
@@ -1514,57 +1510,37 @@ function renderGiftTable(box) {
 
   if (p.unused >= 1) {
     html += '<div class="gift-note warn">' + fmtUSD(Math.round(p.unused)) +
-      " of that is more than the rest of the trip costs, so it has nothing left to pay off. " +
-      "The most one family can cover is the whole trip.</div>";
+      " of that is more than the rest of the trip costs, so it has nothing left to pay off.</div>";
   }
   html += '<div class="gift-note">Nothing here is saved or shared — it is a calculator, not a change to the plan.</div>';
   box.innerHTML = html;
 }
 
-function buildGiftPanel() {
-  const houses = Booking.households(plan);
-  if (houses.length < 2) return null;
+// Folded into the viewer's own panel, collapsed until they open it.
+function buildGiftSection(hid) {
+  if (Booking.households(plan).length < 2) return null;
 
-  const panel = document.createElement("details");
-  panel.className = "panel gift-panel";
-  if (giftFrom) panel.open = true;
+  const wrap = document.createElement("details");
+  wrap.className = "you-gift";
+  if (giftTotal !== null) wrap.open = true;
 
   const sum = document.createElement("summary");
-  sum.textContent = "What if one family chips in?";
-  panel.appendChild(sum);
+  sum.textContent = "What if you chip in more?";
+  wrap.appendChild(sum);
 
-  const controls = document.createElement("div");
-  controls.className = "gift-controls";
+  const baseline = baseOwed()[hid] || 0;
+  if (giftTotal === null) giftTotal = Math.round(baseline);
 
-  const whoWrap = document.createElement("label");
-  whoWrap.className = "gift-field";
-  whoWrap.innerHTML = '<span class="gift-lab">Who is chipping in</span>';
-  const who = document.createElement("select");
-  const none = document.createElement("option");
-  none.value = "";
-  none.textContent = "— pick a family —";
-  who.appendChild(none);
-  for (const h of houses) {
-    const o = document.createElement("option");
-    o.value = h.id;
-    o.textContent = h.name;
-    o.selected = giftFrom === h.id;
-    who.appendChild(o);
-  }
-  whoWrap.appendChild(who);
-
-  const amtWrap = document.createElement("label");
-  amtWrap.className = "gift-field";
-  amtWrap.innerHTML = '<span class="gift-lab">What they pay in total</span>';
+  const field = document.createElement("label");
+  field.className = "gift-field";
+  field.innerHTML = '<span class="gift-lab">What you pay in total</span>';
   const amt = document.createElement("input");
   amt.type = "number";
   amt.min = "0";
   amt.step = "100";
-  amt.placeholder = "0";
-  amtWrap.appendChild(amt);
-
-  controls.append(whoWrap, amtWrap);
-  panel.appendChild(controls);
+  amt.value = String(giftTotal);
+  field.appendChild(amt);
+  wrap.appendChild(field);
 
   const quick = document.createElement("div");
   quick.className = "gift-quick";
@@ -1573,60 +1549,28 @@ function buildGiftPanel() {
 
   // Recompute in place rather than re-rendering the page: a full render on every
   // keystroke would close the keyboard mid-number on a phone.
-  function refresh() {
-    renderGiftTable(box);
-  }
+  function refresh() { renderGiftTable(box, hid); }
 
-  // Start from what that family already owes, so the first thing shown is "nothing
-  // changes" and every figure typed from there reads as a real total.
-  function resetAmountToShare() {
-    const baseline = giftFrom ? (baseOwed()[giftFrom] || 0) : 0;
-    giftTotal = Math.round(baseline);
-    amt.value = giftFrom ? String(giftTotal) : "";
-    rebuildPresets();
+  // Steps above their own share, which is how an offer gets described out loud.
+  for (const v of [1000, 2500, 5000, 10000]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "gift-preset";
+    b.textContent = "+" + fmtUSD(v);
+    b.title = "Your share plus " + fmtUSD(v);
+    b.addEventListener("click", function () {
+      giftTotal = Math.round(baseline + v);
+      amt.value = String(giftTotal);
+      refresh();
+    });
+    quick.appendChild(b);
   }
-
-  function rebuildPresets() {
-    quick.innerHTML = "";
-    if (!giftFrom) return;
-    const baseline = baseOwed()[giftFrom] || 0;
-    // Presets are steps ABOVE their own share, which is how an offer gets described
-    // out loud: "we'll put in another couple of thousand."
-    for (const v of [1000, 2500, 5000, 10000]) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "gift-preset";
-      b.textContent = "+" + fmtUSD(v);
-      b.title = "Their share plus " + fmtUSD(v);
-      b.addEventListener("click", function () {
-        giftTotal = Math.round(baseline + v);
-        amt.value = String(giftTotal);
-        refresh();
-      });
-      quick.appendChild(b);
-    }
-  }
-
-  who.addEventListener("change", function () {
-    giftFrom = who.value;
-    resetAmountToShare();
-    refresh();
-  });
   amt.addEventListener("input", function () {
     giftTotal = amt.value === "" ? null : (parseFloat(amt.value) || 0);
     refresh();
   });
 
-  if (giftFrom) {
-    const baseline = baseOwed()[giftFrom] || 0;
-    if (giftTotal === null) giftTotal = Math.round(baseline);
-    amt.value = String(giftTotal);
-  }
-  rebuildPresets();
-
-  panel.appendChild(quick);
-  panel.appendChild(box);
+  wrap.append(quick, box);
   refresh();
-
-  return panel;
+  return wrap;
 }

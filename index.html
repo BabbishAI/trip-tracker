@@ -310,10 +310,6 @@
     .cat-amt { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
     /* "What if someone chips in" — a private calculator, styled apart from the
        shared controls so it never reads as an edit to the plan. */
-    .gift-panel > summary { cursor: pointer; font-size: 0.86rem; font-weight: 600;
-      color: var(--accent); list-style: none; }
-    .gift-panel > summary::-webkit-details-marker { display: none; }
-    .gift-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; margin-top: 12px; }
     .gift-field { display: flex; flex-direction: column; gap: 4px; }
     .gift-lab { font-size: 0.74rem; font-weight: 600; color: var(--muted); }
     .gift-field select, .gift-field input {
@@ -347,10 +343,15 @@
     .gift-note.warn { color: #8a6d00; }
 
     @media (max-width: 520px) {
-      .gift-controls { grid-template-columns: 1fr; }
     }
     .gift-head { margin-bottom: 12px; font-size: 0.86rem; color: var(--ink); line-height: 1.45; }
     .gift-head.warn { color: #8a6d00; }
+    /* Contribution calculator, nested inside the viewer's own panel */
+    .you-gift { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .you-gift > summary { cursor: pointer; font-size: 0.84rem; font-weight: 600;
+      color: var(--accent); list-style: none; padding: 2px 0; }
+    .you-gift > summary::-webkit-details-marker { display: none; }
+    .you-gift .gift-field { margin-top: 10px; }
   </style>
 </head>
 <body>
@@ -359,6 +360,6 @@
   </div>
   <script src="config.js?v=2"></script>
   <script src="booking.js?v=5"></script>
-  <script src="group.js?v=9"></script>
+  <script src="group.js?v=10"></script>
 </body>
 </html>
