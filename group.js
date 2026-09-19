@@ -856,6 +856,9 @@ function buildShareToggles(item) {
   if (houses.length < 2) return null;
   const split = Booking.splitItem(plan, item);
   const inOn = new Set(Booking.sharersFor(plan, item).map(function (h) { return h.id; }));
+  // For a per-person price the family name alone is ambiguous — two of the four is a
+  // different bill from all four, so the chip carries the count.
+  const counts = Booking.priceMode(item) === "person" ? Booking.headCounts(plan, item) : null;
 
   const d = document.createElement("div");
   d.className = "v-split v-split-edit";
@@ -870,6 +873,7 @@ function buildShareToggles(item) {
     chip.innerHTML =
       '<span class="mark">' + (on ? "✓" : "✕") + "</span>" +
       '<span class="n">' + escapeHTML(h.name) + "</span>" +
+      (on && counts ? '<span class="cnt">×' + (counts[h.id] || 0) + "</span>" : "") +
       (on ? '<span class="amt">' + fmtUSD(Math.round(split[h.id] || 0)) + "</span>" : "");
     chip.addEventListener("click", function () { toggleShare(item, h.id); });
     d.appendChild(chip);
@@ -1115,6 +1119,16 @@ function buildEditPanel(item) {
     edField("Booked with", vendor)
   );
 
+  if (Booking.priceMode(item) === "person") {
+    const heads = buildHeadCountRow(item);
+    if (heads) {
+      const hf = edField("How many people are doing it?", heads,
+        "Only the people actually taking part — not everyone in the family.");
+      hf.classList.add("ed-wide");
+      grid.appendChild(hf);
+    }
+  }
+
   const notesField = edField("Notes", notes);
   notesField.classList.add("ed-wide");
   grid.appendChild(notesField);
@@ -1147,4 +1161,51 @@ function buildEditButton(item) {
     render();
   });
   return btn;
+}
+
+// How many people from each participating family are actually doing this. Only
+// meaningful for a per-person price — for a flat total or a per-family rate the
+// head count changes nothing, so showing the control would just invite fiddling.
+function buildHeadCountRow(item) {
+  const sharers = Booking.sharersFor(plan, item);
+  if (!sharers.length) return null;
+  const counts = Booking.headCounts(plan, item);
+
+  const wrap = document.createElement("div");
+  wrap.className = "ed-heads";
+
+  for (const h of sharers) {
+    const box = document.createElement("label");
+    box.className = "ed-head";
+
+    const name = document.createElement("span");
+    name.className = "ed-headname";
+    name.textContent = h.name;
+
+    const n = document.createElement("input");
+    n.type = "number";
+    n.min = "0";
+    n.step = "1";
+    n.max = String(Booking.headsOf(h));
+    n.value = String(counts[h.id]);
+    n.addEventListener("change", commitEdit(function () {
+      // Freeze every family's current count, then change this one. Writing a lone
+      // entry would leave the others implicit, so a later roster change would move
+      // their numbers without anyone touching the item.
+      const next = {};
+      const live = Booking.headCounts(plan, item);
+      for (const id in live) next[id] = live[id];
+      const v = parseInt(n.value, 10);
+      next[h.id] = isFinite(v) && v >= 0 ? v : 0;
+      item.heads = next;
+    }));
+
+    const cap = document.createElement("span");
+    cap.className = "ed-headcap";
+    cap.textContent = "of " + Booking.headsOf(h);
+
+    box.append(name, n, cap);
+    wrap.appendChild(box);
+  }
+  return wrap;
 }

@@ -29,7 +29,7 @@ window.Booking = (function () {
   // "park tickets are $236 each" — the second has to grow and shrink with the group.
   const PRICE_MODES = {
     total:  { label: "Total for the trip", unit: "",            hint: "One flat price, however many people are in." },
-    person: { label: "Per person",         unit: "per person",  hint: "Multiplied by everyone in the participating families." },
+    person: { label: "Per person",         unit: "per person",  hint: "Multiplied by however many people are actually taking part." },
     family: { label: "Per family",         unit: "per family",  hint: "Multiplied by the number of families taking part." },
   };
   const PRICE_ORDER = ["total", "person", "family"];
@@ -38,15 +38,51 @@ window.Booking = (function () {
     return item && PRICE_MODES[item.priceMode] ? item.priceMode : "total";
   }
 
+  // WHICH households are in on an expense and HOW MANY of their people are doing it
+  // are two different questions. A salon appointment can be limited to one family and
+  // still only cover two of its four members. Before this, per-person prices had to
+  // multiply by whole households, so the only way to make the total come out right
+  // was to falsify the rate — which then made the per-person figure a lie.
+  //
+  // item.heads maps a household id to how many of its people are taking part. Unset
+  // means everybody in the participating households, which is what every plan written
+  // before this field existed meant, so old items are untouched.
+  function hasCustomHeads(item) {
+    return !!(item && item.heads && typeof item.heads === "object" && Object.keys(item.heads).length);
+  }
+
+  function headCounts(state, item) {
+    const out = {};
+    const custom = hasCustomHeads(item) ? item.heads : null;
+    for (const h of sharersFor(state, item)) {
+      let n = headsOf(h);
+      const given = custom ? custom[h.id] : undefined;
+      if (typeof given === "number" && isFinite(given) && given >= 0) n = Math.floor(given);
+      out[h.id] = n;
+    }
+    return out;
+  }
+
+  function totalHeads(state, item) {
+    const counts = headCounts(state, item);
+    let n = 0;
+    for (const id in counts) n += counts[id];
+    return n;
+  }
+
   // How many units the quoted price is charged for, given who is actually in.
   function unitsFor(state, item) {
     const mode = priceMode(item);
     if (mode === "total") return 1;
     const sharers = sharersFor(state, item);
     if (mode === "family") return sharers.length || 1;
-    const heads = sharers.reduce((n, h) => n + headsOf(h), 0);
+    const heads = totalHeads(state, item);
+    if (heads > 0) return heads;
+    // Zero is a real answer once someone has set the counts by hand: nobody is going,
+    // so it costs nothing. Only fall back when no one has said otherwise.
+    if (hasCustomHeads(item)) return 0;
     // Before any families are entered, fall back to the item's own head count.
-    return heads > 0 ? heads : Math.max(1, (item && item.people) || 1);
+    return Math.max(1, (item && item.people) || 1);
   }
 
   // The quoted price itself — real money once known, estimate until then. For a
@@ -171,9 +207,16 @@ window.Booking = (function () {
       return out;
     }
     if (mode === "person") {
-      const heads = sharers.reduce((n, h) => n + headsOf(h), 0);
+      const counts = headCounts(state, item);
+      const heads = totalHeads(state, item);
       if (heads > 0) {
-        for (const h of sharers) out[h.id] = cost * (headsOf(h) / heads);
+        for (const h of sharers) out[h.id] = cost * ((counts[h.id] || 0) / heads);
+        return out;
+      }
+      // Counts were set to zero across the board: nobody owes anything, rather than
+      // falling through to an even split of a cost that is itself zero.
+      if (hasCustomHeads(item)) {
+        for (const h of sharers) out[h.id] = 0;
         return out;
       }
     }
@@ -267,6 +310,7 @@ window.Booking = (function () {
   return {
     STATUS, STATUS_ORDER, statusOf,
     hasActual, effCost, variance, unitPrice, unitsFor, priceMode,
+    headCounts, totalHeads, hasCustomHeads,
     PRICE_MODES, PRICE_ORDER,
     households, householdById, householdName, totalPeople,
     sharersFor, splitItem, ledger, unfunded, settle, rollup,

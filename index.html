@@ -280,6 +280,21 @@
     @media (max-width: 520px) {
       .ed-grid { grid-template-columns: 1fr; }
     }
+    /* Participant counts for a per-person price */
+    .ed-heads { display: flex; flex-wrap: wrap; gap: 8px; }
+    .ed-head {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; background: #fff;
+    }
+    .ed-headname { font-size: 0.8rem; font-weight: 600; color: var(--ink); }
+    .ed-head input {
+      width: 56px; min-height: 32px; padding: 4px 6px; text-align: center;
+      border: 1px solid var(--border); border-radius: 6px;
+      font-size: 0.9rem; font-family: inherit;
+    }
+    .ed-headcap { font-size: 0.72rem; color: #98a0ad; white-space: nowrap; }
+    .v-shrtog .cnt { font-size: 0.72rem; color: #5a6475; font-variant-numeric: tabular-nums; }
+    .v-shrtog.on .cnt { color: #2b3a4d; }
   </style>
 </head>
 <body>
@@ -287,7 +302,7 @@
     <div id="viewRoot"></div>
   </div>
   <script src="config.js?v=2"></script>
-  <script src="booking.js?v=4"></script>
-  <script src="group.js?v=3"></script>
+  <script src="booking.js?v=5"></script>
+  <script src="group.js?v=4"></script>
 </body>
 </html>
