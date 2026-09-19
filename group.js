@@ -645,6 +645,9 @@ function render() {
   if (you) root.appendChild(you);
   const ledger = buildLedgerPanel();
   if (ledger) root.appendChild(ledger);
+
+  const gift = buildGiftPanel();
+  if (gift) root.appendChild(gift);
 }
 
 function renderEmpty() {
@@ -1380,5 +1383,167 @@ function buildCategoryPanel() {
   }
   html += "</div>";
   panel.innerHTML = html;
+  return panel;
+}
+
+// --- "What if someone chips in" -------------------------------------------
+// One household offering to carry more than its share is a normal thing on a family
+// trip, and the question is always the same: if we put in X, what does that actually
+// do for everyone else?
+//
+// This is the one control on the page that does NOT write to the shared plan. Working
+// out what you can afford is not a decision yet, and nobody should have to broadcast a
+// half-formed offer to thirteen other people while they think about it. Nothing here
+// is saved, and nothing here is visible to anyone else.
+
+let giftFrom = "";     // household id offering to contribute
+let giftAmount = 0;    // how much they are considering
+
+// A contribution takes over part of what everyone else owes. It is spread across the
+// other households by the trip's own split basis, so it lands the same way the costs
+// did — a family carrying a bigger share of the trip gets a bigger piece of the help.
+//
+// Nobody can be reduced below zero: money beyond what the others owe between them has
+// nothing left to pay off, so it is reported as unused rather than quietly vanishing
+// or turning into a negative bill.
+function giftPreview(fromId, amount) {
+  const base = {};
+  for (const r of Booking.ledger(plan, countedItems())) base[r.id] = r.owes;
+
+  const houses = Booking.households(plan);
+  const others = houses.filter(function (h) { return h.id !== fromId; });
+  const totalWeight = others.reduce(function (n, h) { return n + Booking.weightOf(plan, h); }, 0);
+
+  const rows = [];
+  let used = 0;
+  for (const h of others) {
+    const owed = base[h.id] || 0;
+    const portion = totalWeight > 0
+      ? amount * (Booking.weightOf(plan, h) / totalWeight)
+      : amount / (others.length || 1);
+    const cut = Math.min(portion, owed);
+    used += cut;
+    rows.push({ name: h.name, before: owed, after: owed - cut, change: -cut });
+  }
+
+  const giverOwed = base[fromId] || 0;
+  rows.unshift({
+    name: Booking.householdName(plan, fromId),
+    before: giverOwed,
+    after: giverOwed + used,
+    change: used,
+    giver: true,
+  });
+
+  return { rows: rows, used: used, requested: amount, unused: Math.max(0, amount - used) };
+}
+
+function renderGiftTable(box) {
+  if (!giftFrom) {
+    box.innerHTML = '<div class="gift-empty">Pick who is chipping in.</div>';
+    return;
+  }
+  const p = giftPreview(giftFrom, Math.max(0, giftAmount || 0));
+
+  let html = '<table class="gift-table"><thead><tr><th>Family</th><th class="n">Now</th>' +
+    '<th class="n">After</th></tr></thead><tbody>';
+  for (const r of p.rows) {
+    const cls = r.giver ? "giver" : "";
+    const delta = Math.abs(r.change) >= 1
+      ? '<span class="gift-delta ' + (r.change > 0 ? "up" : "down") + '">' +
+        (r.change > 0 ? "+" : "−") + fmtUSD(Math.round(Math.abs(r.change))) + "</span>"
+      : "";
+    html += '<tr class="' + cls + '"><td>' + escapeHTML(r.name) + (r.giver ? ' <span class="gift-tag">chipping in</span>' : "") +
+      '</td><td class="n">' + fmtUSD(Math.round(r.before)) + "</td>" +
+      '<td class="n">' + fmtUSD(Math.round(r.after)) + delta + "</td></tr>";
+  }
+  html += "</tbody></table>";
+
+  if (p.unused >= 1) {
+    html += '<div class="gift-note warn">' + fmtUSD(Math.round(p.unused)) +
+      " of that is more than the other families owe between them, so it has nothing left to pay off.</div>";
+  }
+  html += '<div class="gift-note">Nothing here is saved or shared — it is a calculator, not a change to the plan.</div>';
+  box.innerHTML = html;
+}
+
+function buildGiftPanel() {
+  const houses = Booking.households(plan);
+  if (houses.length < 2) return null;
+
+  const panel = document.createElement("details");
+  panel.className = "panel gift-panel";
+  if (giftFrom) panel.open = true;
+
+  const sum = document.createElement("summary");
+  sum.textContent = "What if one family chips in?";
+  panel.appendChild(sum);
+
+  const controls = document.createElement("div");
+  controls.className = "gift-controls";
+
+  const whoWrap = document.createElement("label");
+  whoWrap.className = "gift-field";
+  whoWrap.innerHTML = '<span class="gift-lab">Who is chipping in</span>';
+  const who = document.createElement("select");
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "— pick a family —";
+  who.appendChild(none);
+  for (const h of houses) {
+    const o = document.createElement("option");
+    o.value = h.id;
+    o.textContent = h.name;
+    o.selected = giftFrom === h.id;
+    who.appendChild(o);
+  }
+  whoWrap.appendChild(who);
+
+  const amtWrap = document.createElement("label");
+  amtWrap.className = "gift-field";
+  amtWrap.innerHTML = '<span class="gift-lab">How much</span>';
+  const amt = document.createElement("input");
+  amt.type = "number";
+  amt.min = "0";
+  amt.step = "100";
+  amt.placeholder = "0";
+  amt.value = giftAmount ? String(giftAmount) : "";
+  amtWrap.appendChild(amt);
+
+  controls.append(whoWrap, amtWrap);
+  panel.appendChild(controls);
+
+  const quick = document.createElement("div");
+  quick.className = "gift-quick";
+  const box = document.createElement("div");
+  box.className = "gift-out";
+
+  // Recompute in place rather than re-rendering the page: a full render on every
+  // keystroke would close the keyboard mid-number on a phone.
+  function refresh() {
+    renderGiftTable(box);
+  }
+  who.addEventListener("change", function () { giftFrom = who.value; refresh(); });
+  amt.addEventListener("input", function () {
+    giftAmount = parseFloat(amt.value) || 0;
+    refresh();
+  });
+
+  for (const v of [1000, 2500, 5000]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "gift-preset";
+    b.textContent = fmtUSD(v);
+    b.addEventListener("click", function () {
+      giftAmount = v;
+      amt.value = String(v);
+      refresh();
+    });
+    quick.appendChild(b);
+  }
+  panel.appendChild(quick);
+  panel.appendChild(box);
+  refresh();
+
   return panel;
 }
