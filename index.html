@@ -352,6 +352,31 @@
       color: var(--accent); list-style: none; padding: 2px 0; }
     .you-gift > summary::-webkit-details-marker { display: none; }
     .you-gift .gift-field { margin-top: 10px; }
+    /* Collapsible rows. The header is a real button so it works from the keyboard
+       and reads as interactive, but it has to look like the row it replaced. */
+    .v-rowhead {
+      display: block; width: 100%; padding: 0; margin: 0; text-align: left;
+      background: none; border: none; font: inherit; color: inherit; cursor: pointer;
+    }
+    .v-rowhead:focus-visible { outline: 2px solid #cfe1f7; outline-offset: 3px; border-radius: 6px; }
+    .v-rowhead .v-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .v-rowhead .v-sub { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .v-chev { color: #b4bcc8; font-size: 0.8rem; flex: none; }
+    .v-row.open { align-items: start; }
+    .v-row.open .v-check { margin-top: 3px; }
+    .v-row.open .v-chev { color: var(--accent); }
+    .v-rowhead:hover .v-title { color: var(--accent); }
+    .v-row.closed .v-rowhead { padding-bottom: 2px; }
+    /* The badge sits inline with the title now, so it needs to stop stretching. */
+    .v-rowhead .v-badge { flex: none; }
+
+    .v-expandbar { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+    .v-expandall {
+      padding: 4px 10px; min-height: 28px;
+      border: 1px solid var(--border); border-radius: 999px; background: #fff;
+      font-size: 0.74rem; font-family: inherit; color: var(--muted); cursor: pointer;
+    }
+    .v-expandall:hover { border-color: var(--accent); color: var(--accent); }
   </style>
 </head>
 <body>
@@ -360,6 +385,6 @@
   </div>
   <script src="config.js?v=2"></script>
   <script src="booking.js?v=5"></script>
-  <script src="group.js?v=10"></script>
+  <script src="group.js?v=12"></script>
 </body>
 </html>

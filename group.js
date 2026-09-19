@@ -139,12 +139,6 @@ function buildItemDetail(item) {
   const chips = document.createElement("div");
   chips.className = "v-chips";
 
-  const st = Booking.STATUS[Booking.statusOf(item)];
-  const badge = document.createElement("span");
-  badge.className = "v-badge " + st.cls;
-  badge.textContent = st.label;
-  chips.appendChild(badge);
-
   if (item.category) {
     const c = document.createElement("span");
     c.className = "v-chip v-cat";
@@ -266,11 +260,29 @@ function fallbackCopy(text, done) {
   ta.remove();
 }
 
+// Which rows are expanded. A trip this size is a wall of text if every booking shows
+// its confirmation code, notes and four family chips at once, so a row opens to the
+// detail only when someone asks for it. Module-level, because every edit re-renders.
+let openRows = new Set();
+
+function isRowOpen(item) {
+  // A row being edited is always open — collapsing the panel out from under someone
+  // mid-edit would look like the page had thrown their work away.
+  return openRows.has(item.id) || editingId === item.id;
+}
+
+function toggleRow(id) {
+  if (openRows.has(id)) openRows.delete(id);
+  else openRows.add(id);
+  render();
+}
+
 function buildItemRow(item) {
   const meta = TYPES[item.type] || TYPES.other;
   const included = isIncluded(item);
+  const open = isRowOpen(item);
   const row = document.createElement("div");
-  row.className = "v-row" + (included ? "" : " excluded");
+  row.className = "v-row" + (included ? "" : " excluded") + (open ? " open" : " closed");
 
   // Every item gets the switch, not just the ones flagged optional. Deciding against
   // something and deleting it are different acts: the first should keep the record.
@@ -291,10 +303,22 @@ function buildItemRow(item) {
   const sub = [meta.label];
   if (dateText) sub.push(dateText);
   if (item.people) sub.push(`for ${item.people}`);
-  if (!isIncluded(item)) sub.push("not doing this");
-  main.innerHTML =
-    `<span class="v-title"><span class="v-icon">${meta.icon}</span>${escapeHTML(item.title)}</span>` +
-    `<span class="v-sub">${sub.join(" · ")}</span>`;
+  if (!included) sub.push("not doing this");
+
+  // Status rides in the header rather than the detail: whether money has actually
+  // moved is the one thing worth seeing on every row without opening it.
+  const st = Booking.STATUS[Booking.statusOf(item)];
+
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "v-rowhead";
+  head.setAttribute("aria-expanded", open ? "true" : "false");
+  head.innerHTML =
+    `<span class="v-title"><span class="v-icon">${meta.icon}</span>${escapeHTML(item.title)}` +
+    `<span class="v-badge ${st.cls}">${st.label}</span></span>` +
+    `<span class="v-sub">${sub.join(" · ")}<span class="v-chev">${open ? "▾" : "▸"}</span></span>`;
+  head.addEventListener("click", function () { toggleRow(item.id); });
+  main.appendChild(head);
 
   const cost = document.createElement("div");
   cost.className = "v-cost";
@@ -317,15 +341,17 @@ function buildItemRow(item) {
   }
   cost.innerHTML = costHTML;
 
-  main.appendChild(buildItemDetail(item));
+  if (open) {
+    main.appendChild(buildItemDetail(item));
 
-  if (canEdit()) {
-    const tools = document.createElement("div");
-    tools.className = "v-tools";
-    tools.appendChild(buildEditButton(item));
-    tools.appendChild(buildRemoveButton(item));
-    main.appendChild(tools);
-    if (editingId === item.id) main.appendChild(buildEditPanel(item));
+    if (canEdit()) {
+      const tools = document.createElement("div");
+      tools.className = "v-tools";
+      tools.appendChild(buildEditButton(item));
+      tools.appendChild(buildRemoveButton(item));
+      main.appendChild(tools);
+      if (editingId === item.id) main.appendChild(buildEditPanel(item));
+    }
   }
   row.append(control, main, cost);
   return row;
@@ -625,6 +651,8 @@ function render() {
   if (plan.items.length === 0) {
     listPanel.innerHTML = '<div class="empty">This itinerary is empty.</div>';
   } else {
+    const bar = buildExpandBar();
+    if (bar) listPanel.appendChild(bar);
     listPanel.appendChild(buildTimeline());
   }
   if (canEdit()) listPanel.appendChild(buildAddForm());
@@ -1573,4 +1601,26 @@ function buildGiftSection(hid) {
   wrap.append(quick, box);
   refresh();
   return wrap;
+}
+
+// One control for the whole list, because opening fourteen rows one at a time to
+// scan confirmation numbers is worse than the wall of text it replaced.
+function buildExpandBar() {
+  const ids = plan.items.filter(function (it) { return !it.group; }).map(function (it) { return it.id; });
+  if (ids.length < 2) return null;
+  const allOpen = ids.every(function (id) { return openRows.has(id); });
+
+  const bar = document.createElement("div");
+  bar.className = "v-expandbar";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "v-expandall";
+  btn.textContent = allOpen ? "Collapse all" : "Expand all";
+  btn.addEventListener("click", function () {
+    if (allOpen) openRows = new Set();
+    else openRows = new Set(ids);
+    render();
+  });
+  bar.appendChild(btn);
+  return bar;
 }
