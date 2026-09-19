@@ -298,6 +298,16 @@
     .ed-headcap { font-size: 0.72rem; color: #98a0ad; white-space: nowrap; }
     .v-shrtog .cnt { font-size: 0.72rem; color: #5a6475; font-variant-numeric: tabular-nums; }
     .v-shrtog.on .cnt { color: #2b3a4d; }
+    /* Categories */
+    .v-cat { background: #eef4fb; border-color: #d8e4f2; color: #33506f; font-weight: 600; }
+    .cat-head { font-size: 0.76rem; font-weight: 700; letter-spacing: .04em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+    .cat-list { display: flex; flex-direction: column; }
+    .cat-row { display: flex; justify-content: space-between; align-items: baseline;
+      gap: 12px; padding: 7px 0; border-bottom: 1px solid #f0f2f6; font-size: 0.9rem; }
+    .cat-row:last-child { border-bottom: none; }
+    .cat-name { color: var(--ink); }
+    .cat-amt { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
@@ -306,6 +316,6 @@
   </div>
   <script src="config.js?v=2"></script>
   <script src="booking.js?v=5"></script>
-  <script src="group.js?v=6"></script>
+  <script src="group.js?v=7"></script>
 </body>
 </html>

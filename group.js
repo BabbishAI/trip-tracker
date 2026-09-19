@@ -145,6 +145,13 @@ function buildItemDetail(item) {
   badge.textContent = st.label;
   chips.appendChild(badge);
 
+  if (item.category) {
+    const c = document.createElement("span");
+    c.className = "v-chip v-cat";
+    c.textContent = item.category;
+    chips.appendChild(c);
+  }
+
   if (item.vendor) {
     const v = document.createElement("span");
     v.className = "v-chip";
@@ -598,6 +605,7 @@ function render() {
     ? "Shared plan — anything you change here changes it for all four families, straight away."
     : "Shared plan — pick your options below to see the estimated total. Nothing you change here is saved.";
   root.append(h1, sub);
+  root.appendChild(buildCategoryList());
 
   if (canEdit()) {
     const save = document.createElement("div");
@@ -629,6 +637,9 @@ function render() {
 
   const refs = buildConfirmationPanel();
   if (refs) root.appendChild(refs);
+
+  const cats = buildCategoryPanel();
+  if (cats) root.appendChild(cats);
 
   const you = buildYouPanel();
   if (you) root.appendChild(you);
@@ -874,6 +885,7 @@ function addItem(fields) {
   const item = {
     id: newItemId(),
     type: fields.type || "other",
+    category: fields.category || "",
     title: fields.title,
     cost: fields.cost,
     priceMode: fields.priceMode || "total",
@@ -980,6 +992,7 @@ function buildAddForm() {
   form.innerHTML =
     '<label>What is it?<input name="title" type="text" placeholder="Golf cart rental" required></label>' +
     '<label>Kind<select name="type">' + typeOpts + "</select></label>" +
+    '<label>Category<input name="category" type="text" list="catlist" placeholder="Pick one or type a new one"></label>' +
     '<label>Cost<input name="cost" type="number" min="0" step="0.01" placeholder="0.00" required></label>' +
     '<label>That price is<select name="priceMode">' + modeOpts + "</select></label>" +
     '<label>Starts<input name="date" type="date"></label>' +
@@ -1025,6 +1038,7 @@ function buildAddForm() {
       title: title,
       cost: cost,
       type: form.type.value,
+      category: normalizeCategory(form.category.value),
       priceMode: form.priceMode.value,
       date: form.date.value,
       endDate: form.endDate.value,
@@ -1124,6 +1138,11 @@ function buildEditPanel(item) {
     if (v) item.title = v;   // an empty title would render an unclickable blank row
   }));
 
+  const cat = categoryInput(item.category);
+  cat.addEventListener("change", commitEdit(function () {
+    item.category = normalizeCategory(cat.value);
+  }));
+
   const kind = edSelect(ADD_TYPES.map(function (t) {
     return { value: t, label: (TYPES[t] || TYPES.other).label };
   }), item.type);
@@ -1184,6 +1203,7 @@ function buildEditPanel(item) {
   grid.append(
     edField("Name", title),
     edField("Kind", kind),
+    edField("Category", cat, "Pick one already in use, or type a new one."),
     edField("Starts", start, "The date sets where this sits in the list"),
     edField("Ends", end, "Leave blank for a single day"),
     edField("Estimate", est, "What you expected it to cost"),
@@ -1284,4 +1304,81 @@ function buildHeadCountRow(item) {
     wrap.appendChild(box);
   }
   return wrap;
+}
+
+// --- Categories -----------------------------------------------------------
+// Free-form and created on the spot: whatever the group starts typing becomes the
+// list everyone else picks from. No fixed taxonomy, because every trip invents its
+// own — "Disney days", "boat stuff", "the thing we argue about".
+
+function allCategories() {
+  const seen = {};
+  for (const it of plan.items) {
+    const c = (it.category || "").trim();
+    if (c) seen[c.toLowerCase()] = c;
+  }
+  return Object.keys(seen).sort().map(function (k) { return seen[k]; });
+}
+
+// Fourteen people typing freely would otherwise produce "Food", "food" and "FOOD"
+// as three separate categories. Match an existing one case-insensitively and adopt
+// its spelling; only a genuinely new word starts a new category.
+function normalizeCategory(value) {
+  const v = (value || "").trim();
+  if (!v) return "";
+  for (const c of allCategories()) {
+    if (c.toLowerCase() === v.toLowerCase()) return c;
+  }
+  return v;
+}
+
+// One list, shared by every category box on the page.
+function buildCategoryList() {
+  const dl = document.createElement("datalist");
+  dl.id = "catlist";
+  for (const c of allCategories()) {
+    const o = document.createElement("option");
+    o.value = c;
+    dl.appendChild(o);
+  }
+  return dl;
+}
+
+function categoryInput(value) {
+  const el = document.createElement("input");
+  el.type = "text";
+  el.setAttribute("list", "catlist");
+  el.value = value || "";
+  el.placeholder = "Pick one or type a new one";
+  return el;
+}
+
+// What the trip costs broken down by category, over the items actually counting.
+function buildCategoryPanel() {
+  const items = countedItems();
+  if (!items.length) return null;
+
+  const rows = {};
+  let anyCategorised = false;
+  for (const it of items) {
+    const c = (it.category || "").trim();
+    if (c) anyCategorised = true;
+    const key = c || "\u0000uncategorised";
+    rows[key] = (rows[key] || 0) + Booking.effCost(plan, it);
+  }
+  // Nothing has been categorised yet — an empty breakdown is just noise.
+  if (!anyCategorised) return null;
+
+  const keys = Object.keys(rows).sort();
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  let html = '<div class="cat-head">Where the money goes</div><div class="cat-list">';
+  for (const k of keys) {
+    const label = k === "\u0000uncategorised" ? "Not categorised" : k;
+    html += '<div class="cat-row"><span class="cat-name">' + escapeHTML(label) +
+      '</span><span class="cat-amt">' + fmtUSD(Math.round(rows[k])) + "</span></div>";
+  }
+  html += "</div>";
+  panel.innerHTML = html;
+  return panel;
 }
