@@ -242,10 +242,27 @@ window.Booking = (function () {
   // Settling up can only move money that a person actually laid out. A cost nobody
   // has paid yet is still owed to the vendor, not to another family — folding it into
   // the net would make the settle-up transfers not add up to the stated balances.
+  // Money one household has already handed to another. Fronting a booking and being
+  // paid back for it are different events, and on a trip where the flights were bought
+  // ten months early the second one happens long before anybody is standing in a
+  // kitchen settling up. Without these the ledger keeps insisting on a debt that has
+  // already been paid.
+  function payments(state) {
+    return Array.isArray(state && state.payments) ? state.payments : [];
+  }
+
+  function paymentAmount(p) {
+    const n = p && typeof p.amount === "number" ? p.amount : parseFloat(p && p.amount);
+    return isFinite(n) && n > 0 ? n : 0;
+  }
+
   function ledger(state, countedItems) {
     const rows = {};
     for (const h of households(state)) {
-      rows[h.id] = { id: h.id, name: h.name, size: h.size || 0, owes: 0, owesFunded: 0, paid: 0, net: 0 };
+      rows[h.id] = {
+        id: h.id, name: h.name, size: h.size || 0,
+        owes: 0, owesFunded: 0, paid: 0, sent: 0, received: 0, net: 0,
+      };
     }
     for (const item of countedItems) {
       const split = splitItem(state, item);
@@ -257,8 +274,22 @@ window.Booking = (function () {
       }
       if (funded) rows[item.payer].paid += effCost(state, item);
     }
-    for (const id of Object.keys(rows)) rows[id].net = rows[id].paid - rows[id].owesFunded;
-    return Object.keys(rows).map((id) => rows[id]);
+
+    // A payment settles part of what the sender owed and part of what the receiver
+    // was owed. It changes the balance between them, never either household's share
+    // of the trip — paying early does not make the holiday cost you less.
+    for (const p of payments(state)) {
+      const amt = paymentAmount(p);
+      if (!amt) continue;
+      if (rows[p.from]) rows[p.from].sent += amt;
+      if (rows[p.to]) rows[p.to].received += amt;
+    }
+
+    for (const id of Object.keys(rows)) {
+      const r = rows[id];
+      r.net = r.paid - r.owesFunded + r.sent - r.received;
+    }
+    return Object.keys(rows).map(function (id) { return rows[id]; });
   }
 
   // Cost that no household has fronted yet — still owed to airlines, hosts and parks.
@@ -313,6 +344,7 @@ window.Booking = (function () {
     headCounts, totalHeads, hasCustomHeads,
     PRICE_MODES, PRICE_ORDER,
     households, householdById, householdName, totalPeople,
+    payments, paymentAmount,
     sharersFor, splitItem, ledger, unfunded, settle, rollup,
     SPLIT_BASES, SPLIT_ORDER, splitBasis, weightOf,
     adultsOf, kidsOf, headsOf, totalAdults, totalKids, shareOf,

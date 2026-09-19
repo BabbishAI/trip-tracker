@@ -545,6 +545,12 @@ function buildYouPanel() {
     `<div class="you-big ${net < 0 ? "neg" : net > 0 ? "pos" : ""}">${netText}</div>` +
     `<div class="total-row"><span class="label">Your share of the trip</span><span class="val">${fmtUSD(Math.round(mine.owes))}</span></div>` +
     `<div class="total-row"><span class="label">You've already paid</span><span class="val">${fmtUSD(Math.round(mine.paid))}</span></div>`;
+  if (mine.sent >= 1 || mine.received >= 1) {
+    let extra = "";
+    if (mine.sent >= 1) extra += `<div class="total-row"><span class="label">You've paid other families</span><span class="val">${fmtUSD(Math.round(mine.sent))}</span></div>`;
+    if (mine.received >= 1) extra += `<div class="total-row"><span class="label">Other families have paid you</span><span class="val">${fmtUSD(Math.round(mine.received))}</span></div>`;
+    body.innerHTML += extra;
+  }
   panel.appendChild(body);
 
   // Line-by-line, so the number above is never a black box.
@@ -614,6 +620,9 @@ function buildLedgerPanel() {
     html += `<div class="you-note"><strong>${fmtUSD(Math.round(owedToVendors))}</strong> of the trip hasn\u2019t been paid by anyone yet, so it isn\u2019t in the settling-up above \u2014 that money is still owed to airlines, hosts and parks.</div>`;
   }
   panel.innerHTML = html;
+
+  const pays = buildPaymentsSection();
+  if (pays) panel.appendChild(pays);
   return panel;
 }
 
@@ -762,6 +771,7 @@ function currentPayload() {
     splitBasis: plan.splitBasis,
     groupSel: plan.groupSel,
     groupOff: plan.groupOff,
+    payments: plan.payments,
   };
 }
 
@@ -771,6 +781,7 @@ function currentPayload() {
 // change disappears with no error, which is the worst way to lose a number in a
 // ledger fourteen people are relying on.
 let dirtyItems = new Set();   // item ids touched here (including ones deleted here)
+let dirtyPayments = new Set();  // payment ids touched here (including ones deleted here)
 let dirtyStructure = false;   // title, roster, split basis, choice-group selections
 
 function markItem(id) {
@@ -802,6 +813,21 @@ function mergeInto(stored) {
       base.items[at] = JSON.parse(JSON.stringify(localItem));
     } else {
       base.items.push(JSON.parse(JSON.stringify(localItem)));
+    }
+  }
+
+  const basePayments = Array.isArray(base.payments) ? base.payments : (base.payments = []);
+  const minePayments = {};
+  for (const p of planPayments()) minePayments[p.id] = p;
+  for (const id of dirtyPayments) {
+    const local = minePayments[id];
+    const at = basePayments.findIndex(function (x) { return x.id === id; });
+    if (!local) {
+      if (at >= 0) basePayments.splice(at, 1);
+    } else if (at >= 0) {
+      basePayments[at] = JSON.parse(JSON.stringify(local));
+    } else {
+      basePayments.push(JSON.parse(JSON.stringify(local)));
     }
   }
 
@@ -844,6 +870,7 @@ async function cloudSave() {
   const hadOthers = stored && JSON.stringify(stored) !== JSON.stringify(merged);
   plan = merged;
   dirtyItems = new Set();
+  dirtyPayments = new Set();
   dirtyStructure = false;
   return hadOthers;
 }
@@ -1623,4 +1650,169 @@ function buildExpandBar() {
   });
   bar.appendChild(btn);
   return bar;
+}
+
+// --- Payments between families --------------------------------------------
+// Fronting a booking and being paid back for it are separate events. The flights were
+// bought ten months out; the money comes back in dribs over the following year, not in
+// one reckoning at the kitchen table. Each transfer is recorded as it happens, and the
+// settle-up shows only what is still outstanding.
+
+function newPaymentId() {
+  return "p" + Date.now() + Math.floor(Math.random() * 1000);
+}
+
+function planPayments() {
+  return Array.isArray(plan.payments) ? plan.payments : (plan.payments = []);
+}
+
+function addPayment(fields) {
+  const p = {
+    id: newPaymentId(),
+    from: fields.from,
+    to: fields.to,
+    amount: fields.amount,
+    date: fields.date || "",
+    note: fields.note || "",
+  };
+  planPayments().push(p);
+  savePaymentSoon(p.id);
+  render();
+}
+
+function deletePayment(id) {
+  plan.payments = planPayments().filter(function (p) { return p.id !== id; });
+  savePaymentSoon(id);
+  render();
+}
+
+function buildPaymentsSection() {
+  const houses = Booking.households(plan);
+  if (houses.length < 2) return null;
+
+  const wrap = document.createElement("div");
+  wrap.className = "pay-wrap";
+
+  const paid = planPayments().slice().sort(function (a, b) {
+    return String(b.date || "").localeCompare(String(a.date || ""));
+  });
+
+  const head = document.createElement("div");
+  head.className = "you-head";
+  head.style.marginTop = "16px";
+  head.textContent = "Money already paid back";
+  wrap.appendChild(head);
+
+  if (!paid.length) {
+    const empty = document.createElement("div");
+    empty.className = "you-note";
+    empty.textContent = "Nothing recorded yet. When someone pays their share of a booking to whoever fronted it, record it here and the settling-up above will drop by that much.";
+    wrap.appendChild(empty);
+  } else {
+    const list = document.createElement("ul");
+    list.className = "pay-list";
+    for (const p of paid) {
+      const li = document.createElement("li");
+      const when = p.date ? fmtDate(p.date) : "";
+      const main = document.createElement("div");
+      main.className = "pay-main";
+      main.innerHTML =
+        "<div><strong>" + escapeHTML(Booking.householdName(plan, p.from) || "?") + "</strong> paid <strong>" +
+        escapeHTML(Booking.householdName(plan, p.to) || "?") + "</strong> " +
+        '<span class="amt">' + fmtUSD(Math.round(Booking.paymentAmount(p))) + "</span></div>" +
+        (when || p.note
+          ? '<div class="pay-sub">' + escapeHTML([when, p.note].filter(Boolean).join(" · ")) + "</div>"
+          : "");
+      li.appendChild(main);
+
+      if (canEdit()) {
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "v-del";
+        del.textContent = "Remove";
+        let armed = false;
+        del.addEventListener("click", function () {
+          if (!armed) {
+            armed = true;
+            del.textContent = "Remove for everyone?";
+            del.classList.add("armed");
+            setTimeout(function () {
+              if (!armed) return;
+              armed = false;
+              del.textContent = "Remove";
+              del.classList.remove("armed");
+            }, 8000);
+            return;
+          }
+          deletePayment(p.id);
+        });
+        li.appendChild(del);
+      }
+      list.appendChild(li);
+    }
+    wrap.appendChild(list);
+  }
+
+  if (!canEdit()) return wrap;
+
+  const form = document.createElement("form");
+  form.className = "pay-form";
+
+  function houseOptions(selected) {
+    return '<option value="">— choose —</option>' + houses.map(function (h) {
+      return '<option value="' + h.id + '"' + (h.id === selected ? " selected" : "") + ">" +
+        escapeHTML(h.name) + "</option>";
+    }).join("");
+  }
+
+  form.innerHTML =
+    '<label>Who paid<select name="from">' + houseOptions(getMe()) + "</select></label>" +
+    '<label>Who they paid<select name="to">' + houseOptions("") + "</select></label>" +
+    '<label>How much<input name="amount" type="number" min="0" step="0.01" placeholder="0.00" required></label>' +
+    '<label>When<input name="date" type="date"></label>' +
+    '<label class="pay-wide">What for <span class="opt">optional</span>' +
+    '<input name="note" type="text" placeholder="e.g. their share of the flights"></label>' +
+    '<div class="pay-actions"><button type="submit">Record this payment</button>' +
+    '<span class="pay-msg"></span></div>';
+
+  const msg = form.querySelector(".pay-msg");
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    const from = form.from.value;
+    const to = form.to.value;
+    const amount = parseFloat(form.amount.value);
+    // Guard rails, because a payment recorded the wrong way round quietly doubles a
+    // debt instead of clearing it, and nothing on the page would look obviously wrong.
+    if (!from || !to) { msg.textContent = "Pick who paid and who they paid."; return; }
+    if (from === to) { msg.textContent = "A family can't pay itself."; return; }
+    if (!isFinite(amount) || amount <= 0) { msg.textContent = "Enter an amount."; return; }
+    msg.textContent = "";
+    addPayment({ from: from, to: to, amount: amount, date: form.date.value, note: form.note.value.trim() });
+  });
+
+  const det = document.createElement("details");
+  det.className = "pay-add";
+  const sum = document.createElement("summary");
+  sum.textContent = "+ Record a payment";
+  det.append(sum, form);
+  wrap.appendChild(det);
+
+  return wrap;
+}
+
+// Same debounce and failure handling as an item edit; only the dirty channel differs.
+function savePaymentSoon(id) {
+  if (!canEdit()) return;
+  if (id) dirtyPayments.add(id);
+  setSaveState("Saving…", "pending");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async function () {
+    try {
+      await cloudSave();
+      setSaveState("Saved for everyone", "ok");
+      render();
+    } catch (e) {
+      setSaveState("NOT SAVED — " + e.message + ". Your change is still on screen; try again.", "bad");
+    }
+  }, 700);
 }

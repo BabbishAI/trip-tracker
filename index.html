@@ -377,6 +377,40 @@
       font-size: 0.74rem; font-family: inherit; color: var(--muted); cursor: pointer;
     }
     .v-expandall:hover { border-color: var(--accent); color: var(--accent); }
+    /* Payments between families */
+    .pay-list { list-style: none; margin: 8px 0 0; padding: 0; }
+    .pay-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 9px 0; border-bottom: 1px solid #f0f2f6; font-size: 0.9rem; }
+    .pay-list li:last-child { border-bottom: none; }
+    .pay-main .amt { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .pay-sub { font-size: 0.76rem; color: var(--muted); margin-top: 2px; }
+    .pay-add { margin-top: 12px; }
+    .pay-add > summary { cursor: pointer; font-size: 0.84rem; font-weight: 600;
+      color: var(--accent); list-style: none; padding: 4px 0; }
+    .pay-add > summary::-webkit-details-marker { display: none; }
+    .pay-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px;
+      margin-top: 10px; padding: 14px; border-radius: 10px; background: #f7f8fa; }
+    .pay-form label { display: flex; flex-direction: column; gap: 4px;
+      font-size: 0.76rem; font-weight: 600; color: var(--muted); }
+    .pay-form label .opt { font-weight: 400; color: #98a0ad; }
+    .pay-form input, .pay-form select {
+      padding: 8px 9px; min-height: 38px; width: 100%;
+      border: 1px solid var(--border); border-radius: 7px; background: #fff;
+      font-size: 0.92rem; font-family: inherit; color: var(--ink);
+    }
+    .pay-wide, .pay-actions { grid-column: 1 / -1; }
+    .pay-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .pay-actions button {
+      padding: 9px 16px; min-height: 40px; border: none; border-radius: 8px;
+      background: var(--accent); color: #fff; font-size: 0.88rem; font-weight: 600;
+      font-family: inherit; cursor: pointer;
+    }
+    .pay-actions button:hover { background: #0055ad; }
+    .pay-msg { font-size: 0.78rem; color: #b3261e; font-weight: 600; }
+
+    @media (max-width: 520px) {
+      .pay-form { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -384,7 +418,7 @@
     <div id="viewRoot"></div>
   </div>
   <script src="config.js?v=2"></script>
-  <script src="booking.js?v=5"></script>
-  <script src="group.js?v=12"></script>
+  <script src="booking.js?v=6"></script>
+  <script src="group.js?v=13"></script>
 </body>
 </html>
