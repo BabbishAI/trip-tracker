@@ -1,0 +1,54 @@
+# Keep the Supabase project from being paused for inactivity.
+#
+# Free Supabase projects are paused after about a week idle, and a paused project's
+# hostname stops resolving — every share link dies at once. That has now happened
+# twice: the first project was lost for good in August, and this one was paused on
+# 2026-09-30 with a deletion deadline of early November.
+#
+# One request every three days is enough to count as activity. It runs on GitHub's
+# machines, so it does not depend on anyone's laptop being switched on.
+#
+# NOTE: the plan id is deliberately NOT used here. This file is public, and the plan
+# id is the only thing protecting the trip's confirmation numbers. A lookup for an id
+# that does not exist still reaches the database, which is all that matters.
+name: Keep the database awake
+
+on:
+  schedule:
+    - cron: "17 9 */3 * *"   # every three days, 09:17 UTC
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ping the database
+        run: |
+          set -euo pipefail
+          # The URL and anon key ship in client code by design — this reads them from
+          # config.js so the ping follows the backend automatically if it ever moves.
+          URL=$(grep -o 'https://[a-z0-9]*\.supabase\.co/rest/v1' config.js | head -1)
+          KEY=$(grep -o 'eyJ[A-Za-z0-9._-]*' config.js | head -1)
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            echo "Could not read the backend details out of config.js"
+            exit 1
+          fi
+          echo "Pinging ${URL%/rest/v1}"
+
+          CODE=$(curl -s -o /tmp/out.txt -w '%{http_code}' -m 30 \
+            -X POST "$URL/rpc/get_plan" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"pid":"keepalive-ping-not-a-real-plan"}' || true)
+
+          echo "HTTP $CODE"
+          # 200 with a null body is the expected answer for an id that does not exist.
+          if [ "$CODE" != "200" ]; then
+            echo "The database did not answer normally. If this keeps failing the"
+            echo "project may be paused again — check the Supabase dashboard."
+            cat /tmp/out.txt || true
+            exit 1
+          fi
+          echo "Database is awake."
