@@ -2100,13 +2100,31 @@ function setTaskStatus(t, status) {
   render();
 }
 
+// Type order is TASK_KINDS order, not alphabetical, and that order is deliberate:
+// payment, booking, reimbursement, admin — roughly what it costs you to be late.
+// Missing a payment date has a price; an admin job slipping a week usually does not.
+// Keeping it tied to TASK_KINDS means the dropdown and the sort can never disagree.
+function kindRank(t) {
+  const i = TASK_KINDS.findIndex(function (k) { return k.v === (t.kind || "admin"); });
+  return i < 0 ? TASK_KINDS.length : i;
+}
+
 function sortedTasks() {
+  // Date first, because that is the thing with consequences. Then type, which is what
+  // actually does the work in the ASAP band and anywhere several things fall on one
+  // day — there, every date is equal, so without this the order was effectively
+  // whatever got typed in first. Title last, so the result is stable.
+  //
   // Undated sinks to the bottom rather than the top, where a blank date would
   // otherwise read as "due first".
   return planTasks().slice().sort(function (a, b) {
     const ad = a.due || "9999-12-31";
     const bd = b.due || "9999-12-31";
     if (ad !== bd) return ad < bd ? -1 : 1;
+
+    const ar = kindRank(a), br = kindRank(b);
+    if (ar !== br) return ar - br;
+
     return (a.title || "").localeCompare(b.title || "");
   });
 }
@@ -2509,8 +2527,12 @@ function buildTaskCalendar() {
   const year = Number(calCursor.slice(0, 4));
   const month = Number(calCursor.slice(5, 7));
 
+  // Built from sortedTasks(), not storage order, so several things falling on one day
+  // appear in the same type order as the list — in the grid's two visible pills and in
+  // the detail under it. Two views disagreeing about what comes first is the kind of
+  // small wrongness that makes people stop trusting the page.
   const byDay = {};
-  planTasks().forEach(function (t) {
+  sortedTasks().forEach(function (t) {
     if (!t.due) return;
     (byDay[t.due] = byDay[t.due] || []).push(t);
   });
