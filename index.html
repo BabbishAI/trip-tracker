@@ -462,7 +462,7 @@
     .sched-band.overdue { color: #b3261e; }
     .sched-band.soon { color: #9a6700; }
 
-    .task { display: grid; grid-template-columns: auto 1fr auto;
+    .task { display: grid; grid-template-columns: auto auto 1fr auto;
       gap: 4px 10px; align-items: start; padding: 10px 0;
       border-bottom: 1px solid #f0f2f6; }
     .task:last-child { border-bottom: none; }
@@ -479,6 +479,39 @@
     .task-who { font-weight: 600; color: #44506b; }
     .task.overdue .task-due { color: #b3261e; font-weight: 700; }
     .task.soon .task-due { color: #9a6700; font-weight: 600; }
+
+    /* --- The due-date block ---------------------------------------------- */
+    /* A fixed-width column you can scan, rather than a date mid-sentence. */
+    .task-when {
+      width: 54px; flex: none; align-self: start;
+      padding: 4px 2px 5px; border-radius: 8px; text-align: center;
+      background: #f1f3f7; border: 1px solid var(--border);
+      line-height: 1.05;
+    }
+    .task-when .w-mon {
+      display: block; font-size: 0.6rem; font-weight: 800;
+      letter-spacing: 0.07em; color: var(--muted);
+    }
+    .task-when .w-day {
+      display: block; font-size: 1.2rem; font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .task-when .w-yr { display: block; font-size: 0.58rem; color: var(--muted); }
+    .task-when .w-none {
+      display: block; font-size: 0.6rem; font-weight: 700; color: #9aa3ae;
+      padding: 3px 0;
+    }
+    .task-when .w-asap {
+      display: block; font-size: 0.66rem; font-weight: 800;
+      letter-spacing: 0.04em; color: #a24d00; padding: 8px 0;
+    }
+    .task-when.overdue { background: #fdecea; border-color: #e8a9a0; }
+    .task-when.overdue .w-mon, .task-when.overdue .w-day { color: #b3261e; }
+    .task-when.soon { background: #fff4e0; border-color: #e6c782; }
+    .task-when.soon .w-mon, .task-when.soon .w-day { color: #8a5c00; }
+    .task-when.asap { background: #fff3e6; border-color: #f0d2b0; }
+    .task-when.asap .w-mon, .task-when.asap .w-day { color: #a24d00; }
+    .task-when.closed { opacity: 0.5; }
     .task-state { font-style: italic; }
     .task-link, .task-notes { font-size: 0.78rem; color: var(--muted); margin-top: 3px; }
     .task-notes { white-space: pre-wrap; }
@@ -594,6 +627,9 @@
 
     @media (max-width: 520px) {
       .task-edgrid, .task-addform { grid-template-columns: 1fr; }
+      .task { gap: 4px 8px; }
+      .task-when { width: 46px; }
+      .task-when .w-day { font-size: 1.05rem; }
       /* A phone cannot show a readable title in a 44px column, so the grid becomes a
          density map — colour and a count — and the detail comes from tapping a day. */
       .cal-cell { min-height: 46px; }
@@ -614,6 +650,6 @@
   <script src="config.js?v=3"></script>
   <script src="backend.js?v=1"></script>
   <script src="booking.js?v=6"></script>
-  <script src="group.js?v=18"></script>
+  <script src="group.js?v=19"></script>
 </body>
 </html>

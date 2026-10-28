@@ -2221,6 +2221,7 @@ function buildTaskRow(t) {
     setTaskStatus(t, tick.checked ? "done" : "todo");
   });
   row.appendChild(tick);
+  row.appendChild(buildWhenBlock(t));
 
   const main = document.createElement("div");
   main.className = "task-main";
@@ -2234,17 +2235,15 @@ function buildTaskRow(t) {
   const owner = taskOwnerName(t);
   if (owner) meta += '<span class="task-who">' + escapeHTML(owner) + "</span>";
 
-  if (!t.due && t.asap && !isTaskClosed(t)) {
-    meta += '<span class="task-due">no fixed date</span>';
-  }
-
   if (t.due) {
     const d = daysUntil(t.due);
-    let when = fmtDate(t.due);
+    const day = parseISO(t.due).toLocaleDateString(undefined, { weekday: "long" });
+    let when = day;
     if (!isTaskClosed(t)) {
       if (d < 0) when += " · " + Math.abs(d) + (Math.abs(d) === 1 ? " day late" : " days late");
-      else if (d === 0) when += " · today";
-      else when += " · in " + d + (d === 1 ? " day" : " days");
+      else if (d === 0) when += " · due today";
+      else if (d === 1) when += " · due tomorrow";
+      else when += " · in " + d + " days";
     }
     meta += '<span class="task-due">' + escapeHTML(when) + "</span>";
   }
@@ -2290,6 +2289,48 @@ function buildTaskRow(t) {
   }
 
   return row;
+}
+
+/**
+ * The date, as a block in its own column.
+ *
+ * It used to sit mid-sentence in the grey meta line, between the type chip and the
+ * notes, at the same size as everything around it — so "when is this due" could not
+ * be answered by scanning, only by reading each row. A fixed-width column of dates
+ * can be run down with your eye, and the colour says how worried to be before you
+ * have read a single word.
+ *
+ * Every task gets a block, including undated ones, because a column with gaps in it
+ * stops being a column.
+ */
+function buildWhenBlock(t) {
+  const el = document.createElement("div");
+  el.className = "task-when " + taskUrgency(t);
+
+  if (!t.due) {
+    el.innerHTML = t.asap
+      ? '<span class="w-asap">ASAP</span>'
+      : '<span class="w-none">no<br>date</span>';
+    return el;
+  }
+
+  const d = parseISO(t.due);
+  const mon = d.toLocaleDateString(undefined, { month: "short" }).toUpperCase();
+
+  // The trip straddles two years, so a bare "MAR 18" is genuinely ambiguous. The year
+  // shows only when it is not the current one, to keep the block quiet the rest of
+  // the time.
+  const thisYear = new Date().getFullYear();
+  const yr = d.getFullYear() !== thisYear
+    ? "<span class=\"w-yr\">'" + String(d.getFullYear()).slice(2) + "</span>"
+    : "";
+
+  el.innerHTML =
+    '<span class="w-mon">' + escapeHTML(mon) + "</span>" +
+    '<span class="w-day">' + d.getDate() + "</span>" + yr;
+
+  el.title = fmtDate(t.due);
+  return el;
 }
 
 // Fields commit on BLUR, not on every keystroke. A re-render mid-typing steals the
