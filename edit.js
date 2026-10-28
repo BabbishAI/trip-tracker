@@ -45,7 +45,8 @@ const TYPE_ORDER = ["flight", "stay", "car", "reservation", "ticket", "other"];
 // to the same timeframe — this keeps the calendar opening on the trip's months.
 let state = { title: "", sort: "type", items: [], households: [], splitBasis: "people", groupSel: {}, groupOff: {}, lastDate: "", lastEndDate: "", lastPeople: "", cloudId: "", published: false };
 
-const SUPABASE = window.SUPABASE || {};
+// Transport lives in backend.js, shared with the group view.
+const BACKEND = window.tripBackend;
 
 // Id of the item currently being edited inline (null when none).
 let editingId = null;
@@ -98,14 +99,6 @@ function save() {
 // --- Cloud sync (Supabase) ------------------------------------------------
 let syncTimer = null;
 
-function sbHeaders(extra) {
-  return Object.assign({
-    "apikey": SUPABASE.anon,
-    "Authorization": "Bearer " + SUPABASE.anon,
-    "Content-Type": "application/json",
-  }, extra || {});
-}
-
 // Short, hard-to-guess id so a link reveals only that one plan.
 function newId() {
   const bytes = new Uint8Array(8);
@@ -116,15 +109,10 @@ function newId() {
   return (s + "0000000000").slice(0, 10);
 }
 
-// Save via the save_plan() function (insert-or-update, runs with elevated rights so
-// it isn't blocked by the table's locked-down policies).
+// Insert-or-update. The backend holds a lock while it writes and keeps the copy it
+// replaced, so a bad save is recoverable.
 async function cloudSave(id, payload) {
-  const res = await fetch(SUPABASE.url + "/rpc/save_plan", {
-    method: "POST",
-    headers: sbHeaders(),
-    body: JSON.stringify({ pid: id, payload: payload }),
-  });
-  if (!res.ok) throw new Error("cloud save failed: " + res.status);
+  await BACKEND.save(id, payload);
 }
 
 function setSyncStatus(kind) {
@@ -143,7 +131,7 @@ function setSyncStatus(kind) {
 
 // Once a plan is published, push edits to the cloud (debounced) so its link stays current.
 function scheduleCloudSync() {
-  if (!(state.published && state.cloudId && SUPABASE.url)) return;
+  if (!(state.published && state.cloudId && BACKEND.configured())) return;
   setSyncStatus("saving");
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => {
@@ -1177,13 +1165,7 @@ function editLinkFor(id) {
 }
 
 async function cloudFetch(id) {
-  const res = await fetch(SUPABASE.url + "/rpc/get_plan", {
-    method: "POST",
-    headers: sbHeaders(),
-    body: JSON.stringify({ pid: id }),
-  });
-  if (!res.ok) throw new Error("cloud load failed: " + res.status);
-  return res.json(); // stored plan object, or null
+  return BACKEND.get(id); // stored plan object, or null
 }
 
 function copyToClipboard(text) {
@@ -1212,7 +1194,7 @@ async function presentCloudLink(label, linkFor, copiedMsg, workingMsg) {
     $("copyMsg").textContent = "Add at least one activity first.";
     return;
   }
-  if (!SUPABASE.url) {
+  if (!BACKEND.configured()) {
     $("shareLink").value = "";
     $("copyMsg").textContent = "Cloud storage isn't configured.";
     return;
@@ -1310,7 +1292,7 @@ function maybeImportFromHash() {
 // Adopts the cloud id so further edits sync back to the same shared link.
 async function maybeLoadFromCloud() {
   const id = new URLSearchParams(location.search).get("id");
-  if (!id || !SUPABASE.url) return;
+  if (!id || !BACKEND.configured()) return;
   const clearId = () => history.replaceState(null, "", location.pathname);
 
   // Already editing this exact plan here — nothing to load.

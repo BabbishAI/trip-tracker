@@ -1,3 +1,13 @@
+-- RETIRED 2026-10-27. Kept for reference only.
+--
+-- The backend is no longer Supabase. It is a Google Apps Script web app in front of a
+-- private Google Sheet: see apps-script/Code.gs and apps-script/SETUP.md. This file
+-- describes the database that was lost three times and is not part of the live system.
+--
+-- It is still here because tools/rescue-from-supabase.sh can pull the trip out of that
+-- project if it is ever restored, and because the shape of the access model carried
+-- over: exact-id reads, no listing, snapshot before overwrite.
+
 -- Version history for shared trip plans.
 --
 -- WHY THIS EXISTS

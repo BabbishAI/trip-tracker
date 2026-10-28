@@ -4,21 +4,13 @@
 
 const $ = (sel) => document.querySelector(sel);
 
-const SUPABASE = window.SUPABASE || {};
+// Transport lives in backend.js, shared with the editor.
+const BACKEND = window.tripBackend;
 
-// Fetch a plan by id via the get_plan() function (reads are limited to exact-id lookups).
+// Fetch a plan by id. Reads are limited to exact-id lookups — there is no listing
+// operation, so the id remains the only way in.
 async function cloudFetch(id) {
-  const res = await fetch(SUPABASE.url + "/rpc/get_plan", {
-    method: "POST",
-    headers: {
-      "apikey": SUPABASE.anon,
-      "Authorization": "Bearer " + SUPABASE.anon,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ pid: id }),
-  });
-  if (!res.ok) throw new Error("load failed: " + res.status);
-  return res.json(); // the stored plan object, or null if the id isn't found
+  return BACKEND.get(id); // the stored plan, or null if the id isn't found
 }
 
 function fmtUSD(n) {
@@ -855,16 +847,7 @@ async function cloudSave() {
 
   const merged = mergeInto(stored);
 
-  const res = await fetch(SUPABASE.url + "/rpc/save_plan", {
-    method: "POST",
-    headers: {
-      "apikey": SUPABASE.anon,
-      "Authorization": "Bearer " + SUPABASE.anon,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ pid: planId, payload: merged }),
-  });
-  if (!res.ok) throw new Error("save failed: " + res.status);
+  await BACKEND.save(planId, merged);
 
   // Adopt the merged result so this page now shows everyone else's changes too.
   const hadOthers = stored && JSON.stringify(stored) !== JSON.stringify(merged);
