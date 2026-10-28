@@ -412,6 +412,31 @@
       .pay-form { grid-template-columns: 1fr; }
     }
 
+
+    /* --- Top-level tabs --------------------------------------------------- */
+    /* The page was one long column; on a phone, "what do I owe" was a very long
+       scroll and the deadlines sat in the middle of it. */
+    .tabs {
+      display: flex; gap: 4px; margin: 0 0 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tab {
+      flex: 1 1 0; min-height: 44px; padding: 10px 8px;
+      border: none; border-bottom: 2px solid transparent; background: transparent;
+      font: inherit; font-size: 0.95rem; font-weight: 600; color: var(--muted);
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      gap: 7px; white-space: nowrap;
+    }
+    .tab:hover { color: var(--ink); }
+    .tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-badge {
+      min-width: 19px; height: 19px; padding: 0 5px; border-radius: 999px;
+      background: var(--muted); color: #fff;
+      font-size: 0.68rem; font-weight: 700; line-height: 19px; text-align: center;
+    }
+    .tab-badge.over { background: #b3261e; }
+    .tab-badge.soon { background: #9a6700; }
+
     /* --- Schedule: what needs doing ------------------------------------- */
     /* Urgency is carried by colour in both views, from one shared rule in
        taskUrgency(), so the list and the calendar can never disagree. */
@@ -551,6 +576,6 @@
   <script src="config.js?v=3"></script>
   <script src="backend.js?v=1"></script>
   <script src="booking.js?v=6"></script>
-  <script src="group.js?v=15"></script>
+  <script src="group.js?v=16"></script>
 </body>
 </html>

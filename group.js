@@ -637,7 +637,12 @@ function render() {
     ? "Shared plan — anything you change here changes it for all four families, straight away."
     : "Shared plan — pick your options below to see the estimated total. Nothing you change here is saved.";
   root.append(h1, sub);
+
+  // Invisible, and needed by the category inputs on more than one tab, so it is not
+  // part of any tab's content.
   root.appendChild(buildCategoryList());
+
+  root.appendChild(buildTabBar());
 
   if (canEdit()) {
     const save = document.createElement("div");
@@ -647,42 +652,142 @@ function render() {
   }
   paintSaveState();
 
-  const listPanel = document.createElement("div");
-  listPanel.className = "panel";
-  if (plan.items.length === 0) {
-    listPanel.innerHTML = '<div class="empty">This itinerary is empty.</div>';
+  const tab = getTab();
+
+  if (tab === "trip") {
+    const listPanel = document.createElement("div");
+    listPanel.className = "panel";
+    if (plan.items.length === 0) {
+      listPanel.innerHTML = '<div class="empty">This itinerary is empty.</div>';
+    } else {
+      const bar = buildExpandBar();
+      if (bar) listPanel.appendChild(bar);
+      listPanel.appendChild(buildTimeline());
+    }
+    if (canEdit()) listPanel.appendChild(buildAddForm());
+    root.appendChild(listPanel);
+
+    const totalPanel = document.createElement("div");
+    totalPanel.className = "panel total-panel";
+    let note = "";
+    if (totalGroups > 0) note = `${chosenGroups} of ${totalGroups} choice group${totalGroups === 1 ? "" : "s"} selected`;
+    totalPanel.innerHTML =
+      `<div class="total-row grand"><span class="label">Estimated trip total</span>` +
+      `<span class="val">${fmtUSD(total)}</span></div>` +
+      (note ? `<div class="total-note">${note}</div>` : "");
+    root.appendChild(totalPanel);
+
+    const refs = buildConfirmationPanel();
+    if (refs) root.appendChild(refs);
+
+  } else if (tab === "schedule") {
+    const sched = buildSchedulePanel();
+    if (sched) root.appendChild(sched);
+
   } else {
-    const bar = buildExpandBar();
-    if (bar) listPanel.appendChild(bar);
-    listPanel.appendChild(buildTimeline());
+    const you = buildYouPanel();
+    if (you) root.appendChild(you);
+    const ledger = buildLedgerPanel();
+    if (ledger) root.appendChild(ledger);
+    const cats = buildCategoryPanel();
+    if (cats) root.appendChild(cats);
   }
-  if (canEdit()) listPanel.appendChild(buildAddForm());
-  root.appendChild(listPanel);
+}
 
-  const totalPanel = document.createElement("div");
-  totalPanel.className = "panel total-panel";
-  let note = "";
-  if (totalGroups > 0) note = `${chosenGroups} of ${totalGroups} choice group${totalGroups === 1 ? "" : "s"} selected`;
-  totalPanel.innerHTML =
-    `<div class="total-row grand"><span class="label">Estimated trip total</span>` +
-    `<span class="val">${fmtUSD(total)}</span></div>` +
-    (note ? `<div class="total-note">${note}</div>` : "");
-  root.appendChild(totalPanel);
+// --- Tabs -------------------------------------------------------------------
+//
+// Everything used to be one column: itinerary, total, schedule, confirmation
+// numbers, every family's share, the settle-up and the category breakdown, in that
+// order. On a phone that is a very long scroll to answer "what do I owe", and the
+// deadlines were buried in the middle of it.
+//
+// Three tabs, because there are three questions the group actually asks: what are we
+// doing, what still has to be done, and who owes what.
 
-  const sched = buildSchedulePanel();
-  if (sched) root.appendChild(sched);
+const TABS = [
+  { v: "trip", label: "Trip" },
+  { v: "schedule", label: "Schedule" },
+  { v: "money", label: "Money" },
+];
 
-  const refs = buildConfirmationPanel();
-  if (refs) root.appendChild(refs);
+let activeTab = "";
 
-  const cats = buildCategoryPanel();
-  if (cats) root.appendChild(cats);
+// Remembered per plan and per device. This is a viewer's own convenience, not part of
+// the shared document — which tab you had open is nobody else's business, and writing
+// it to the plan would broadcast it to thirteen other people.
+function tabKey() { return "tt-tab-" + (planId || "hash"); }
 
-  const you = buildYouPanel();
-  if (you) root.appendChild(you);
-  const ledger = buildLedgerPanel();
-  if (ledger) root.appendChild(ledger);
+function getTab() {
+  if (activeTab) return activeTab;
 
+  // ?tab=schedule makes a tab linkable, so "look at the schedule" can be a link.
+  // The URL hash is NOT used: a legacy share link carries the whole plan there.
+  const asked = new URLSearchParams(location.search).get("tab");
+  if (asked && TABS.some(function (t) { return t.v === asked; })) return (activeTab = asked);
+
+  try {
+    const saved = localStorage.getItem(tabKey());
+    if (saved && TABS.some(function (t) { return t.v === saved; })) return (activeTab = saved);
+  } catch (e) { /* private mode — fall through to the default */ }
+
+  return (activeTab = "trip");
+}
+
+function setTab(v) {
+  if (activeTab === v) return;
+  activeTab = v;
+  try { localStorage.setItem(tabKey(), v); } catch (e) {}
+  render();
+  // Land at the top. Switching tabs halfway down the old one and staying at that
+  // scroll position looks like the page failed to change.
+  window.scrollTo(0, 0);
+}
+
+// The one count worth showing without opening the tab: something is late, or due
+// shortly. A badge that just repeats "9 tasks" earns nothing.
+function scheduleBadge() {
+  if (!Array.isArray(plan.tasks) || !plan.tasks.length) return null;
+  let over = 0, soon = 0;
+  plan.tasks.forEach(function (t) {
+    const u = taskUrgency(t);
+    if (u === "overdue") over++;
+    else if (u === "soon") soon++;
+  });
+  if (over) return { text: String(over), cls: "over", title: over + " overdue" };
+  if (soon) return { text: String(soon), cls: "soon", title: soon + " due soon" };
+  return null;
+}
+
+function buildTabBar() {
+  const nav = document.createElement("div");
+  nav.className = "tabs";
+  nav.setAttribute("role", "tablist");
+
+  const current = getTab();
+  TABS.forEach(function (t) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "tab" + (t.v === current ? " on" : "");
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", t.v === current ? "true" : "false");
+    b.textContent = t.label;
+
+    if (t.v === "schedule") {
+      const badge = scheduleBadge();
+      if (badge) {
+        const s = document.createElement("span");
+        s.className = "tab-badge " + badge.cls;
+        s.textContent = badge.text;
+        s.title = badge.title;
+        b.appendChild(s);
+      }
+    }
+
+    b.addEventListener("click", function () { setTab(t.v); });
+    nav.appendChild(b);
+  });
+
+  return nav;
 }
 
 function renderEmpty() {
