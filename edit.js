@@ -133,6 +133,81 @@ async function cloudSave(id, payload) {
   await BACKEND.save(id, Object.assign({}, stored || {}, payload));
 }
 
+// --- Who has opened the group link ------------------------------------------
+//
+// This page only. The group view does not show it and does not mention it.
+//
+// It answers a coordination question — has everyone actually seen the schedule, or
+// is one family about to be surprised by a payment date — which is otherwise only
+// answerable by asking thirteen people.
+//
+// What it can and cannot know: a device, not a person. A browser gets a random id
+// the first time it opens the link; the NAME beside it is whichever household that
+// device picked on the Money tab, which the viewer chose themselves. A device that
+// never picked one stays unidentified, and a person using a phone and a laptop is
+// two rows.
+async function renderVisitors() {
+  const box = $("visitorBox");
+  if (!box) return;
+  if (!(state.cloudId && BACKEND.configured())) { box.hidden = true; return; }
+
+  let rows;
+  try {
+    rows = await BACKEND.visitors(state.cloudId);
+  } catch (e) {
+    box.hidden = true;   // never let this break the editor
+    return;
+  }
+  if (!rows || !rows.length) { box.hidden = true; return; }
+
+  const names = {};
+  (state.households || []).forEach(function (h) { names[h.id] = h.name; });
+
+  const when = function (iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    const stamp = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    if (days <= 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 7) return days + " days ago";
+    return stamp;
+  };
+
+  const identified = rows.filter(function (r) { return r.household && names[r.household]; });
+  const seen = {};
+  identified.forEach(function (r) { seen[r.household] = true; });
+  const missing = (state.households || []).filter(function (h) { return !seen[h.id]; });
+
+  let html =
+    '<div class="area-heading">Who has opened the link</div>' +
+    '<table class="vis-table"><thead><tr>' +
+    "<th>Who</th><th>Last opened</th><th>Times</th><th>First opened</th>" +
+    "</tr></thead><tbody>";
+
+  rows.forEach(function (r) {
+    const who = r.household && names[r.household]
+      ? escapeHTML(names[r.household])
+      : '<span class="vis-anon">unidentified device</span>';
+    html += "<tr><td>" + who + "</td><td>" + escapeHTML(when(r.last_seen)) +
+      "</td><td>" + r.visits + "</td><td>" + escapeHTML(when(r.first_seen)) + "</td></tr>";
+  });
+
+  html += "</tbody></table>";
+
+  if (missing.length) {
+    html += '<div class="vis-note"><strong>No visit recorded for:</strong> ' +
+      missing.map(function (h) { return escapeHTML(h.name); }).join(", ") +
+      ". They may still have opened it without picking their family on the Money tab, " +
+      "which is how a device gets a name here.</div>";
+  } else {
+    html += '<div class="vis-note">Every family has opened the link at least once.</div>';
+  }
+
+  box.innerHTML = html;
+  box.hidden = false;
+}
+
 function setSyncStatus(kind) {
   const el = $("syncStatus");
   if (!el) return;
@@ -1379,6 +1454,10 @@ async function init() {
   syncEndMin();
 
   render();
+
+  // After the plan is loaded, so state.cloudId and the roster are both available.
+  // Not awaited: the editor must not wait on it, and it fails silently if it fails.
+  renderVisitors();
 
   $("addBtn").addEventListener("click", addItem);
   $("addHhBtn").addEventListener("click", addHousehold);

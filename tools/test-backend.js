@@ -439,5 +439,96 @@ console.log('\n14. REGRESSION: a failed write does not wipe every plan in the ta
     c.call({ op: 'get', pid: 'other' }).data.tag === 'retried');
 }
 
+console.log('\n15. Visit tracking: one row per device, not a growing log');
+{
+  const c = load();
+  c.call({ op: 'save', pid: 'p', payload: realPlan });
+
+  c.call({ op: 'visit', pid: 'p', device: 'dev-a', who: 'h1' });
+  c.call({ op: 'visit', pid: 'p', device: 'dev-a', who: 'h1' });
+  c.call({ op: 'visit', pid: 'p', device: 'dev-a', who: 'h1' });
+  c.call({ op: 'visit', pid: 'p', device: 'dev-b', who: '' });
+
+  const v = c.call({ op: 'visitors', pid: 'p' }).data;
+  ok('two devices, not four rows', v.length === 2, v.length);
+  const a = v.find(x => x.device === 'dev-a');
+  ok('repeat visits increment a counter', a && a.visits === 3, a);
+  ok('the claimed household is kept', a && a.household === 'h1', a);
+  ok('an unclaimed device is still counted', v.some(x => x.device === 'dev-b' && x.visits === 1));
+  ok('first and last seen are both recorded', !!(a.first_seen && a.last_seen));
+
+  // The whole point of a separate tab: page loads must not burn the plan's history.
+  const versions = c.call({ op: 'versions', pid: 'p' }).data;
+  ok('visits create NO plan versions', versions.length === 0, versions.length);
+  const plan = c.call({ op: 'get', pid: 'p' }).data;
+  ok('visits do not touch the plan document', JSON.stringify(plan) === JSON.stringify(realPlan));
+  ok('and nothing visit-shaped leaked into it', plan.visits === undefined && plan.device === undefined);
+}
+
+console.log('\n16. Visits are scoped, best-effort, and cleaned up');
+{
+  const c = load();
+  c.call({ op: 'visit', pid: 'plan-one', device: 'd1', who: 'h1' });
+  c.call({ op: 'visit', pid: 'plan-two', device: 'd1', who: 'h2' });
+  ok('the same device on two plans stays separate',
+    c.call({ op: 'visitors', pid: 'plan-one' }).data.length === 1 &&
+    c.call({ op: 'visitors', pid: 'plan-two' }).data.length === 1);
+  ok('a plan you did not ask about is not returned',
+    c.call({ op: 'visitors', pid: 'plan-one' }).data[0].household === 'h1');
+
+  const none = c.call({ op: 'visit', pid: 'p', device: '' });
+  ok('a missing device id is refused, not recorded', none.ok === true && none.data.recorded === false, none);
+
+  // Best-effort: a busy sheet must not turn a page load into an error.
+  const busy = load();
+  busy.LockService = { getScriptLock: () => ({ tryLock: () => false, releaseLock() {} }) };
+  const vm2 = require('vm');
+  vm2.runInContext('LockService = { getScriptLock: function(){ return { tryLock: function(){ return false; }, releaseLock: function(){} }; } }', busy);
+  const refused = busy.call({ op: 'visit', pid: 'p', device: 'd9' });
+  ok('a busy sheet gives up quietly instead of failing the page load',
+    refused.ok === true && refused.data.recorded === false, refused);
+
+  c.call({ op: 'save', pid: 'plan-one', payload: { items: [] } });
+  c.call({ op: 'delete', pid: 'plan-one' });
+  ok('deleting a plan removes its visitors too',
+    c.call({ op: 'visitors', pid: 'plan-one' }).data.length === 0);
+  ok('but leaves another plan\'s visitors alone',
+    c.call({ op: 'visitors', pid: 'plan-two' }).data.length === 1);
+}
+
+console.log('\n17. No two .gs files declare the same global');
+{
+  // Every file in an Apps Script project shares ONE global scope. A sibling setup
+  // script declared `var HEADERS = [...]` as an array, which silently replaced
+  // Code.gs's HEADERS object — headerFor_() began returning undefined and EVERY
+  // request failed the moment it was deployed. Nothing in a per-file test can catch
+  // that, because each file is correct on its own.
+  const dir = path.join(__dirname, '..', 'apps-script');
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.gs'));
+  const owners = {};
+  const clashes = [];
+
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    const names = new Set();
+    // Column 0 only: anything indented is inside a function and therefore scoped.
+    const re = /^(?:var|let|const|function)\s+([A-Za-z_$][\w$]*)/gm;
+    let m;
+    while ((m = re.exec(src))) names.add(m[1]);
+    for (const n of names) {
+      if (owners[n] && owners[n] !== f) clashes.push(n + ' (' + owners[n] + ' and ' + f + ')');
+      else owners[n] = f;
+    }
+  }
+
+  ok('apps-script/ has at least one file to check', files.length >= 1, files);
+  ok('no global is declared by two files', clashes.length === 0, clashes);
+
+  // The specific shape that caused the outage, as a named case.
+  ok('TAB_HEADERS is owned by exactly one file',
+    Object.keys(owners).filter(n => n === 'TAB_HEADERS').length === 1 || !owners.TAB_HEADERS,
+    owners.TAB_HEADERS);
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

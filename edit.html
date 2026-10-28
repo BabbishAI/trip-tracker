@@ -311,6 +311,16 @@
     .shr-chip .n { font-weight: 600; }
     .shr-chip .a { font-variant-numeric: tabular-nums; }
     .shr-chip .a.out { font-style: italic; opacity: .7; }
+    .vis-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.86rem; }
+    .vis-table th {
+      text-align: left; font-size: 0.68rem; text-transform: uppercase;
+      letter-spacing: 0.05em; color: #6b6b6b; font-weight: 700;
+      padding: 0 8px 5px 0; border-bottom: 1px solid #e3e3df;
+    }
+    .vis-table td { padding: 7px 8px 7px 0; border-bottom: 1px solid #f0f2f6; }
+    .vis-table td:nth-child(3) { font-variant-numeric: tabular-nums; }
+    .vis-anon { color: #9aa3ae; font-style: italic; }
+    .vis-note { margin-top: 10px; font-size: 0.78rem; color: #6b6b6b; line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -423,10 +433,11 @@
 
     <div class="panel" id="realityBox"></div>
     <div class="panel" id="ledgerBox"></div>
+    <div class="panel" id="visitorBox" hidden></div>
   </div>
   <script src="config.js?v=3"></script>
-  <script src="backend.js?v=1"></script>
+  <script src="backend.js?v=2"></script>
   <script src="booking.js?v=6"></script>
-  <script src="edit.js?v=2"></script>
+  <script src="edit.js?v=3"></script>
 </body>
 </html>

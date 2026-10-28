@@ -58,6 +58,14 @@
     versions: (id) => backendCall("versions", { pid: id }),
     restore: (id, vid) => backendCall("restore", { pid: id, vid: vid }),
 
+    // Note that this device opened the plan. Deliberately swallows every failure:
+    // it runs on page load, and nobody's trip should fail to render because a piece
+    // of bookkeeping did not.
+    visit: (id, device, who) =>
+      backendCall("visit", { pid: id, device: device, who: who || "" }).catch(() => null),
+
+    visitors: (id) => backendCall("visitors", { pid: id }),
+
     configured: () => !!(BACKEND.url && BACKEND.url.indexOf("PASTE") !== 0),
   };
 })();

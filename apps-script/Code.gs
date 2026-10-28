@@ -50,6 +50,11 @@ var SHEET_ID = '';
 
 var PLANS_TAB = 'plans';
 var VERSIONS_TAB = 'versions';
+var VISITS_TAB = 'visits';
+
+// Roughly ten times the size of the group, so ordinary use never reaches it. Devices
+// are pruned oldest-last-seen-first if it ever does.
+var KEEP_VISITS = 300;
 
 // A single Sheet cell holds at most 50,000 characters and SILENTLY TRUNCATES beyond
 // that, which would corrupt a plan without any error. Plans are split across rows
@@ -92,6 +97,8 @@ function doPost(e) {
       case 'save':     return json_({ ok: true, data: savePlan_(pid, req.payload) });
       case 'versions': return json_({ ok: true, data: listVersions_(pid) });
       case 'restore':  return json_({ ok: true, data: restoreVersion_(pid, req.vid) });
+      case 'visit':    return json_({ ok: true, data: recordVisit_(pid, req.device, req.who) });
+      case 'visitors': return json_({ ok: true, data: listVisits_(pid) });
       case 'delete':   return json_({ ok: true, data: deletePlan_(pid) });
       default:         return json_({ ok: false, error: 'Unknown op: ' + op });
     }
@@ -204,10 +211,87 @@ function deletePlan_(pid) {
   try {
     dropRows_(tab_(PLANS_TAB), PLANS_TAB, 0, pid);
     dropRows_(tab_(VERSIONS_TAB), VERSIONS_TAB, 0, pid);
+    dropRows_(tab_(VISITS_TAB), VISITS_TAB, 0, pid);
     return { deleted: true };
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Note that a device opened this plan.
+ *
+ * One row per device rather than an append-only log, so the tab stays a fixed size
+ * no matter how often the group checks the page. An ever-growing log of fourteen
+ * people refreshing a trip page would be the biggest thing in the spreadsheet within
+ * a season, and would answer the actual question ("who has seen this?") worse.
+ *
+ * Deliberately NOT stored in the plan document: the backend versions the plan on
+ * every save, so a visit written there would spend the fifty-version history on page
+ * loads and leave nothing to recover a bad edit from.
+ *
+ * Best-effort by design. If the sheet is busy it gives up rather than queueing behind
+ * a save — a missed visit record costs nothing, a delayed save costs someone their
+ * edit. It never throws for the same reason: this is called on page load, and the
+ * trip must render whether or not the bookkeeping worked.
+ */
+function recordVisit_(pid, device, who) {
+  var id = String(device || '').slice(0, 64);
+  if (!id) return { recorded: false };
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return { recorded: false, reason: 'busy' };
+
+  try {
+    var sh = tab_(VISITS_TAB);
+    var rows = sh.getDataRange().getValues();
+    var now = new Date();
+    var kept = [];
+    var found = false;
+
+    for (var i = 1; i < rows.length; i++) {
+      var r = rows[i];
+      if (String(r[0]) === pid && String(r[1]) === id) {
+        found = true;
+        kept.push([pid, id, String(who || r[2] || ''), r[3] || now, now, Number(r[5] || 0) + 1]);
+      } else if (String(r[0]) !== '' || String(r[1]) !== '') {
+        kept.push(r);
+      }
+    }
+
+    if (!found) kept.push([pid, id, String(who || ''), now, now, 1]);
+
+    // Oldest last_seen goes first if this ever grows past the cap.
+    if (kept.length > KEEP_VISITS) {
+      kept.sort(function (a, b) { return new Date(b[4]) - new Date(a[4]); });
+      kept = kept.slice(0, KEEP_VISITS);
+    }
+
+    rewriteTab_(sh, VISITS_TAB, kept);
+    return { recorded: true };
+  } catch (err) {
+    return { recorded: false, reason: 'error' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Visitors for one plan, newest first. Requires the plan id like everything else. */
+function listVisits_(pid) {
+  var rows = tab_(VISITS_TAB).getDataRange().getValues();
+  var out = [];
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) !== pid) continue;
+    out.push({
+      device: String(rows[i][1]),
+      household: String(rows[i][2] || ''),
+      first_seen: rows[i][3] ? new Date(rows[i][3]).toISOString() : '',
+      last_seen: rows[i][4] ? new Date(rows[i][4]).toISOString() : '',
+      visits: Number(rows[i][5] || 0)
+    });
+  }
+  out.sort(function (a, b) { return (b.last_seen || '').localeCompare(a.last_seen || ''); });
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -236,17 +320,25 @@ function spreadsheet_() {
   return active;
 }
 
+// NAMED TAB_HEADERS, NOT HEADERS, ON PURPOSE. Every .gs file in an Apps Script
+// project shares ONE global scope, so a top-level `var HEADERS` in any other file
+// silently replaces this one. That is not hypothetical: a sibling setup script
+// declared `var HEADERS = [...]` as an array, which overwrote this object and made
+// headerFor_() return undefined — every single request failed with "Cannot read
+// properties of undefined", and the whole site went down the moment it deployed.
+//
 // The column layout is defined here rather than read back off row 1. Deriving the row
 // width from whatever happens to be in row 1 meant that a tab which had lost its
 // header — by a mid-write failure, a stray row deletion in the Sheet UI, or a Drive
 // version restore — silently became ONE column wide: every save then stored the plan
 // id and threw the trip JSON away, while still answering {ok:true}.
-var HEADERS = {};
-HEADERS[PLANS_TAB] = ['plan_id', 'seq', 'chunk', 'updated_at'];
-HEADERS[VERSIONS_TAB] = ['plan_id', 'version_id', 'seq', 'chunk', 'saved_at', 'items'];
+var TAB_HEADERS = {};
+TAB_HEADERS[PLANS_TAB] = ['plan_id', 'seq', 'chunk', 'updated_at'];
+TAB_HEADERS[VERSIONS_TAB] = ['plan_id', 'version_id', 'seq', 'chunk', 'saved_at', 'items'];
+TAB_HEADERS[VISITS_TAB] = ['plan_id', 'device_id', 'household', 'first_seen', 'last_seen', 'visits'];
 
 function headerFor_(name) {
-  return HEADERS[name] || HEADERS[PLANS_TAB];
+  return TAB_HEADERS[name] || TAB_HEADERS[PLANS_TAB];
 }
 
 function tab_(name) {

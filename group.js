@@ -803,9 +803,40 @@ function renderMessage(html) {
   $("#viewRoot").innerHTML = '<div class="empty">' + html + "</div>";
 }
 
+// A stable, meaningless id for this browser, so repeat visits from one phone count
+// as one visitor rather than twenty. It identifies a device, not a person — the name
+// attached to it, if any, is whichever household that device claimed on the Money
+// tab, which the viewer chose themselves.
+function deviceId() {
+  try {
+    let id = localStorage.getItem("tt-device");
+    if (!id) {
+      id = "d" + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+      localStorage.setItem("tt-device", id);
+    }
+    return id;
+  } catch (e) {
+    return ""; // private mode: the backend refuses a blank id, which is fine
+  }
+}
+
+// Fire-and-forget, once per page load. Never awaited and never allowed to throw:
+// the trip renders whether or not this works.
+let visitNoted = false;
+function noteVisit() {
+  if (visitNoted || !planId || !BACKEND.configured()) return;
+  visitNoted = true;
+  const id = deviceId();
+  if (!id) return;
+  try {
+    BACKEND.visit(planId, id, getMe());
+  } catch (e) { /* nothing here is worth interrupting a page load for */ }
+}
+
 function startPlan() {
   if (!plan || !Array.isArray(plan.items)) { renderEmpty(); return; }
   if (!Array.isArray(plan.tasks)) plan.tasks = [];
+  noteVisit();
   for (const it of plan.items) {
     it.date = it.date || "";
     it.endDate = it.endDate || "";
