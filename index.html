@@ -522,6 +522,44 @@
       border: none; border-radius: 8px; background: var(--accent); color: #fff;
       font: inherit; font-weight: 600; cursor: pointer; }
 
+
+    /* --- ASAP: urgent without a deadline ---------------------------------- */
+    .sched-band.asap { color: #a24d00; }
+    .sched-sum .s-asap { color: #a24d00; font-weight: 600; }
+    .task-asap {
+      padding: 1px 7px; border-radius: 999px;
+      background: #ffe6cc; color: #a24d00; font-weight: 700;
+      font-size: 0.68rem; letter-spacing: 0.04em;
+    }
+    .task.asap .task-due { color: #a24d00; font-weight: 600; }
+    .task-asapbox {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+      margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+      background: #fff6ec; border: 1px solid #f0d9c2;
+      font-size: 0.84rem; font-weight: 600; color: #7a3d00; cursor: pointer;
+    }
+    .task-asapbox input { width: 17px; height: 17px; cursor: pointer; }
+    .task-asaphint {
+      flex-basis: 100%; font-weight: 400; font-size: 0.76rem; color: #946b45;
+    }
+    .task-addasap {
+      grid-column: 1 / -1; display: flex; align-items: center; gap: 8px;
+      font-size: 0.82rem; color: var(--muted); cursor: pointer;
+    }
+    .task-addasap input { width: 17px; height: 17px; cursor: pointer; }
+    .tab-badge.asap { background: #a24d00; }
+    .cal-cell.u-asap { background: #fff3e6; border-color: #f0d2b0; }
+    .cal-pill.asap { background: #ffe0c2; color: #8a4100; font-weight: 600; }
+    .cal-cell.u-asap::after { background: #a24d00; }
+    .cal-asap {
+      margin: 0 0 14px; padding: 10px 12px;
+      border: 1px solid #f0d9c2; border-radius: 9px; background: #fff6ec;
+    }
+    .cal-asaphead {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+      font-weight: 700; color: #a24d00; margin-bottom: 2px;
+    }
+
     /* --- Calendar ------------------------------------------------------- */
     .cal-nav { display: flex; align-items: center; justify-content: center; gap: 14px;
       margin: 4px 0 10px; }
@@ -576,6 +614,6 @@
   <script src="config.js?v=3"></script>
   <script src="backend.js?v=1"></script>
   <script src="booking.js?v=6"></script>
-  <script src="group.js?v=16"></script>
+  <script src="group.js?v=17"></script>
 </body>
 </html>

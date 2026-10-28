@@ -747,13 +747,15 @@ function setTab(v) {
 // shortly. A badge that just repeats "9 tasks" earns nothing.
 function scheduleBadge() {
   if (!Array.isArray(plan.tasks) || !plan.tasks.length) return null;
-  let over = 0, soon = 0;
+  let over = 0, asap = 0, soon = 0;
   plan.tasks.forEach(function (t) {
     const u = taskUrgency(t);
     if (u === "overdue") over++;
+    else if (u === "asap") asap++;
     else if (u === "soon") soon++;
   });
   if (over) return { text: String(over), cls: "over", title: over + " overdue" };
+  if (asap) return { text: String(asap), cls: "asap", title: asap + " to do as soon as possible" };
   if (soon) return { text: String(soon), cls: "soon", title: soon + " due soon" };
   return null;
 }
@@ -2013,13 +2015,21 @@ function daysUntil(iso) {
 
 // Drives both the grouping in the list and the colour in the calendar, so the two
 // views can never disagree about what counts as urgent.
+//
+// ASAP exists because plenty of real jobs are urgent without having a deadline —
+// ring the host, decide about the second car, chase someone for a number. Those had
+// no date, so they sank to the bottom under "No date yet", which is the opposite of
+// what they need. The flag raises urgency; it does not replace the date, so a task
+// can be both "as soon as you can" and "by the 18th at the latest".
+//
+// Genuinely overdue still outranks it: a date you have already missed is worse news
+// than a job you have not started.
 function taskUrgency(t) {
   if (isTaskClosed(t)) return "closed";
+  if (t.due && daysUntil(t.due) < 0) return "overdue";
+  if (t.asap) return "asap";
   if (!t.due) return "undated";
-  const d = daysUntil(t.due);
-  if (d < 0) return "overdue";
-  if (d <= SOON_DAYS) return "soon";
-  return "later";
+  return daysUntil(t.due) <= SOON_DAYS ? "soon" : "later";
 }
 
 function taskOwnerName(t) {
@@ -2041,6 +2051,7 @@ function addTask(fields) {
     owner: fields.owner || "",
     due: fields.due || "",
     amount: fields.amount === "" || fields.amount == null ? "" : Number(fields.amount),
+    asap: !!fields.asap,
     status: "todo",
     doneOn: "",
     linked: fields.linked || "",
@@ -2127,11 +2138,12 @@ function buildSchedulePanel() {
   head.appendChild(toggle);
   panel.appendChild(head);
 
-  const counts = { overdue: 0, soon: 0, later: 0, undated: 0, closed: 0 };
+  const counts = { overdue: 0, asap: 0, soon: 0, later: 0, undated: 0, closed: 0 };
   tasks.forEach(function (t) { counts[taskUrgency(t)]++; });
 
   const bits = [];
   if (counts.overdue) bits.push('<span class="s-over">' + counts.overdue + " overdue</span>");
+  if (counts.asap) bits.push('<span class="s-asap">' + counts.asap + " to do now</span>");
   if (counts.soon) bits.push('<span class="s-soon">' + counts.soon + " due soon</span>");
   if (counts.later) bits.push(counts.later + " later");
   if (counts.undated) bits.push(counts.undated + " with no date");
@@ -2157,6 +2169,7 @@ function buildTaskList() {
 
   const bands = [
     { key: "overdue", label: "Overdue" },
+    { key: "asap", label: "As soon as possible" },
     { key: "soon", label: "Next " + SOON_DAYS + " days" },
     { key: "later", label: "Later" },
     { key: "undated", label: "No date yet" },
@@ -2197,8 +2210,15 @@ function buildTaskRow(t) {
   let meta = '<span class="task-kind k-' + escapeHTML(t.kind || "admin") + '">' +
     escapeHTML(labelFor(TASK_KINDS, t.kind, "Admin")) + "</span>";
 
+  // Shown even once it is done, so the record of what was urgent survives.
+  if (t.asap) meta += '<span class="task-asap">ASAP</span>';
+
   const owner = taskOwnerName(t);
   if (owner) meta += '<span class="task-who">' + escapeHTML(owner) + "</span>";
+
+  if (!t.due && t.asap && !isTaskClosed(t)) {
+    meta += '<span class="task-due">no fixed date</span>';
+  }
 
   if (t.due) {
     const d = daysUntil(t.due);
@@ -2358,6 +2378,27 @@ function buildTaskEditor(t) {
   );
   box.appendChild(grid);
 
+  // A checkbox rather than another entry in the status dropdown: "as soon as
+  // possible" is about WHEN, not about how far along it is, and a job can be both
+  // urgent and already in progress.
+  const asap = document.createElement("label");
+  asap.className = "task-asapbox";
+  const asapTick = document.createElement("input");
+  asapTick.type = "checkbox";
+  asapTick.checked = !!t.asap;
+  asapTick.addEventListener("change", function () {
+    t.asap = asapTick.checked;
+    saveTaskSoon(t.id);
+    render();
+  });
+  asap.appendChild(asapTick);
+  asap.appendChild(document.createTextNode(" Do this as soon as possible"));
+  const hint = document.createElement("span");
+  hint.className = "task-asaphint";
+  hint.textContent = "Moves it to the top of the list. Works with or without a due date.";
+  asap.appendChild(hint);
+  box.appendChild(asap);
+
   const nf = field("Notes", notes);
   nf.className = "task-edf wide";
   box.appendChild(nf);
@@ -2411,6 +2452,8 @@ function buildTaskAddForm() {
     (plan.households || []).map(function (h) {
       return '<option value="' + escapeHTML(h.id) + '">' + escapeHTML(h.name) + "</option>";
     }).join("") + "</select>" +
+    '<label class="task-addasap"><input type="checkbox" name="asap"> ' +
+    "Do this as soon as possible — no fixed deadline needed</label>" +
     '<button type="submit">Add it</button>';
 
   form.addEventListener("submit", function (e) {
@@ -2423,6 +2466,7 @@ function buildTaskAddForm() {
       kind: form.kind.value,
       amount: form.amount.value,
       owner: form.owner.value,
+      asap: form.asap.checked,
     });
     form.reset();
   });
@@ -2515,12 +2559,12 @@ function buildTaskCalendar() {
       (iso === calSelected ? " is-sel" : "") +
       (here.length ? " has" : "");
 
-    let worst = "";
+    const RANK = { overdue: 4, asap: 3, soon: 2, later: 1 };
+    let worst = "", worstRank = 0;
     here.forEach(function (t) {
       const u = taskUrgency(t);
-      if (u === "overdue") worst = "overdue";
-      else if (u === "soon" && worst !== "overdue") worst = "soon";
-      else if (!worst && !isTaskClosed(t)) worst = "later";
+      const r = RANK[u] || 0;
+      if (r > worstRank) { worstRank = r; worst = u; }
     });
     if (worst) cell.classList.add("u-" + worst);
     if (here.length && here.every(isTaskClosed)) cell.classList.add("u-closed");
@@ -2545,11 +2589,28 @@ function buildTaskCalendar() {
   }
   wrap.appendChild(grid);
 
+  // A calendar can only show things that have a date. An ASAP job with no deadline is
+  // the most urgent thing on the list and would be the one item the grid silently
+  // omits, so it gets its own strip rather than being left to the footnote.
+  const asapNoDate = sortedTasks().filter(function (t) {
+    return t.asap && !t.due && !isTaskClosed(t);
+  });
+  if (asapNoDate.length) {
+    const strip = document.createElement("div");
+    strip.className = "cal-asap";
+    const h = document.createElement("div");
+    h.className = "cal-asaphead";
+    h.textContent = "As soon as possible — no fixed date";
+    strip.appendChild(h);
+    asapNoDate.forEach(function (t) { strip.appendChild(buildTaskRow(t)); });
+    wrap.insertBefore(strip, wrap.firstChild);
+  }
+
   // The grid can only ever show a truncated title. Anything with a date that is not
   // in view this month would otherwise be invisible, so say so rather than imply the
   // month is the whole list.
   const elsewhere = planTasks().filter(function (t) { return t.due && monthOf(t.due) !== calCursor; }).length;
-  const undated = planTasks().filter(function (t) { return !t.due; }).length;
+  const undated = planTasks().filter(function (t) { return !t.due; }).length - asapNoDate.length;
   const notes = [];
   if (elsewhere) notes.push(elsewhere + (elsewhere === 1 ? " task is" : " tasks are") + " in other months");
   if (undated) notes.push(undated + (undated === 1 ? " task has" : " tasks have") + " no date");
