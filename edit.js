@@ -109,10 +109,28 @@ function newId() {
   return (s + "0000000000").slice(0, 10);
 }
 
-// Insert-or-update. The backend holds a lock while it writes and keeps the copy it
-// replaced, so a bad save is recoverable.
+// Insert-or-update, preserving the parts of the plan this editor does not manage.
+//
+// THIS READ IS NOT OPTIONAL. The editor builds its payload from `state`, which only
+// ever held the six fields it edits. Anything else living on the plan — the repayments
+// between families, and now the schedule of what still has to be done — was simply
+// absent from the payload, and a save is a whole-document replace. So merely OPENING
+// edit.html?id=<plan> destroyed them: maybeLoadFromCloud() ends in save(), save()
+// calls scheduleCloudSync(), and 1.2 seconds later the shared plan came back without
+// them. No edit, no warning, nothing on screen to notice.
+//
+// Reading first and layering the editor's fields on top means a section the editor
+// knows nothing about survives, including any added after this was written. Failing
+// loudly when the read fails is the other half: writing blind is how the data was
+// lost in the first place.
 async function cloudSave(id, payload) {
-  await BACKEND.save(id, payload);
+  let stored = null;
+  try {
+    stored = await BACKEND.get(id);
+  } catch (e) {
+    throw new Error("could not read the current plan before saving");
+  }
+  await BACKEND.save(id, Object.assign({}, stored || {}, payload));
 }
 
 function setSyncStatus(kind) {

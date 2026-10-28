@@ -202,8 +202,8 @@ function deletePlan_(pid) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(25000)) throw new Error('the sheet was busy - nothing was deleted, try again');
   try {
-    dropRows_(tab_(PLANS_TAB), 0, pid);
-    dropRows_(tab_(VERSIONS_TAB), 0, pid);
+    dropRows_(tab_(PLANS_TAB), PLANS_TAB, 0, pid);
+    dropRows_(tab_(VERSIONS_TAB), VERSIONS_TAB, 0, pid);
     return { deleted: true };
   } finally {
     lock.releaseLock();
@@ -236,19 +236,68 @@ function spreadsheet_() {
   return active;
 }
 
+// The column layout is defined here rather than read back off row 1. Deriving the row
+// width from whatever happens to be in row 1 meant that a tab which had lost its
+// header — by a mid-write failure, a stray row deletion in the Sheet UI, or a Drive
+// version restore — silently became ONE column wide: every save then stored the plan
+// id and threw the trip JSON away, while still answering {ok:true}.
+var HEADERS = {};
+HEADERS[PLANS_TAB] = ['plan_id', 'seq', 'chunk', 'updated_at'];
+HEADERS[VERSIONS_TAB] = ['plan_id', 'version_id', 'seq', 'chunk', 'saved_at', 'items'];
+
+function headerFor_(name) {
+  return HEADERS[name] || HEADERS[PLANS_TAB];
+}
+
 function tab_(name) {
   var ss = spreadsheet_();
   var sh = ss.getSheetByName(name);
-  if (sh) return sh;
+  var header = headerFor_(name);
 
-  sh = ss.insertSheet(name);
-  if (name === PLANS_TAB) {
-    sh.appendRow(['plan_id', 'seq', 'chunk', 'updated_at']);
-  } else {
-    sh.appendRow(['plan_id', 'version_id', 'seq', 'chunk', 'saved_at', 'items']);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.getRange(1, 1, 1, header.length).setValues([header]);
+    sh.setFrozenRows(1);
+    return sh;
   }
-  sh.setFrozenRows(1);
+
+  // Repair a missing or wrong header in place. Cheap to check, and it is the one
+  // thing every read and write downstream depends on being right.
+  var first = sh.getRange(1, 1, 1, header.length).getValues()[0];
+  if (String(first[0]) !== header[0] || String(first[header.length - 1]) !== header[header.length - 1]) {
+    sh.insertRowBefore(1);
+    sh.getRange(1, 1, 1, header.length).setValues([header]);
+    sh.setFrozenRows(1);
+  }
   return sh;
+}
+
+/**
+ * Replace a tab's contents without ever leaving it empty.
+ *
+ * The previous version called clearContents() and then setValues(). Between those two
+ * calls the tab held nothing at all — not just the plan being written, but EVERY plan
+ * in it. Any failure in that window (a Sheets timeout, a quota error, the six-minute
+ * execution limit) left the whole thing wiped, with no rollback and no retry, while
+ * the caller saw an ordinary "not saved" error and would reasonably try again.
+ *
+ * Writing over the rows in place and only then trimming what is left over means a
+ * failure can corrupt at worst the tail of the tab, and the header always survives.
+ */
+function rewriteTab_(sh, name, rows) {
+  var header = headerFor_(name);
+  var all = [header].concat(rows);
+
+  if (sh.getMaxRows() < all.length) {
+    sh.insertRowsAfter(sh.getMaxRows(), all.length - sh.getMaxRows());
+  }
+
+  sh.getRange(1, 1, all.length, header.length).setValues(padRows_(all, header.length));
+
+  var leftover = sh.getMaxRows() - all.length;
+  if (leftover > 0) {
+    sh.getRange(all.length + 1, 1, leftover, sh.getMaxColumns()).clearContent();
+  }
 }
 
 /** Reassemble a plan from its chunk rows, or '' if the id is not present. */
@@ -273,7 +322,6 @@ function readChunks_(sh, pid) {
  */
 function writeChunks_(sh, pid, text, when) {
   var rows = sh.getDataRange().getValues();
-  var header = rows[0];
   var kept = [];
   for (var i = 1; i < rows.length; i++) {
     if (String(rows[i][0]) !== pid) kept.push(rows[i]);
@@ -284,9 +332,7 @@ function writeChunks_(sh, pid, text, when) {
     added.push([pid, seq, text.substr(off, CHUNK), seq === 0 ? when : '']);
   }
 
-  var all = [header].concat(kept, added);
-  sh.clearContents();
-  sh.getRange(1, 1, all.length, header.length).setValues(padRows_(all, header.length));
+  rewriteTab_(sh, PLANS_TAB, kept.concat(added));
 }
 
 function addVersion_(pid, text) {
@@ -350,28 +396,22 @@ function pruneVersions_(sh, pid) {
   var doomed = {};
   ids.slice(KEEP_VERSIONS).forEach(function (v) { doomed[v] = true; });
 
-  var header = rows[0];
   var kept = [];
   for (var j = 1; j < rows.length; j++) {
     if (String(rows[j][0]) === pid && doomed[Number(rows[j][1])]) continue;
     kept.push(rows[j]);
   }
 
-  var all = [header].concat(kept);
-  sh.clearContents();
-  sh.getRange(1, 1, all.length, header.length).setValues(padRows_(all, header.length));
+  rewriteTab_(sh, VERSIONS_TAB, kept);
 }
 
-function dropRows_(sh, col, value) {
+function dropRows_(sh, name, col, value) {
   var rows = sh.getDataRange().getValues();
-  var header = rows[0];
   var kept = [];
   for (var i = 1; i < rows.length; i++) {
     if (String(rows[i][col]) !== value) kept.push(rows[i]);
   }
-  var all = [header].concat(kept);
-  sh.clearContents();
-  sh.getRange(1, 1, all.length, header.length).setValues(padRows_(all, header.length));
+  rewriteTab_(sh, name, kept);
 }
 
 /** setValues() rejects ragged input, and clearContents() can leave short rows. */

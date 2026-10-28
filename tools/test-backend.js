@@ -8,34 +8,109 @@ const CODE = path.join(__dirname, '..', 'apps-script', 'Code.gs');
 const fs = require('fs');
 const vm = require('vm');
 
+// A closer model of a real Sheet than "an array of rows".
+//
+// Sheets is a FIXED GRID: it has a row and column count independent of how much is
+// filled in, getDataRange() covers only the used region, an empty sheet still answers
+// [['']], and inserting rows shifts everything below. The previous stub modelled none
+// of that, which is why it happily passed a backend that destroyed the tab's header.
+const DEFAULT_ROWS = 1000;
+const DEFAULT_COLS = 26;
+
 function makeSheet(name) {
-  let data = [];
-  const api = {
-    name,
-    _dump: () => data,
-    getDataRange: () => ({
-      getValues: () => (data.length ? data.map(r => r.slice()) : [['']]),
-    }),
-    appendRow: (r) => { data.push(r.slice()); },
-    setFrozenRows: () => {},
-    clearContents: () => { data = []; },
-    getLastRow: () => data.length,
-    getRange: (row, col, numRows, numCols) => ({
+  let maxRows = DEFAULT_ROWS;
+  let maxCols = DEFAULT_COLS;
+  let grid = Array.from({ length: maxRows }, () => Array(maxCols).fill(''));
+  let failNext = false;
+
+  const isBlank = (v) => v === '' || v === null || v === undefined;
+
+  function lastRow() {
+    for (let r = maxRows - 1; r >= 0; r--) if (grid[r].some(v => !isBlank(v))) return r + 1;
+    return 0;
+  }
+  function lastCol() {
+    for (let c = maxCols - 1; c >= 0; c--) {
+      for (let r = 0; r < maxRows; r++) if (!isBlank(grid[r][c])) return c + 1;
+    }
+    return 0;
+  }
+
+  function range(row, col, numRows, numCols) {
+    return {
+      getValues: () => {
+        const out = [];
+        for (let i = 0; i < numRows; i++) {
+          const r = grid[row - 1 + i] || Array(maxCols).fill('');
+          out.push(r.slice(col - 1, col - 1 + numCols));
+        }
+        return out;
+      },
       setValues: (vals) => {
+        if (failNext) { failNext = false; throw new Error('Service Spreadsheets timed out.'); }
         if (vals.length !== numRows) throw new Error('setValues row count mismatch');
         for (const v of vals) {
           if (v.length !== numCols) throw new Error('setValues ragged row: ' + JSON.stringify(v));
         }
+        if (row - 1 + numRows > maxRows) {
+          // The real API throws rather than growing the sheet for you.
+          throw new Error('Those rows are out of bounds.');
+        }
         for (let i = 0; i < numRows; i++) {
-          const target = row - 1 + i;
-          while (data.length <= target) data.push([]);
-          const r = data[target];
-          for (let j = 0; j < numCols; j++) r[col - 1 + j] = vals[i][j];
+          for (let j = 0; j < numCols; j++) grid[row - 1 + i][col - 1 + j] = vals[i][j];
         }
       },
-    }),
+      clearContent: () => {
+        for (let i = 0; i < numRows; i++) {
+          if (!grid[row - 1 + i]) continue;
+          for (let j = 0; j < numCols; j++) grid[row - 1 + i][col - 1 + j] = '';
+        }
+      },
+      setFontWeight: () => range(row, col, numRows, numCols),
+      setBackground: () => range(row, col, numRows, numCols),
+      setFontColor: () => range(row, col, numRows, numCols),
+      setNumberFormat: () => range(row, col, numRows, numCols),
+      setVerticalAlignment: () => range(row, col, numRows, numCols),
+      setWrap: () => range(row, col, numRows, numCols),
+      setHorizontalAlignment: () => range(row, col, numRows, numCols),
+      setFormulas: () => range(row, col, numRows, numCols),
+      setDataValidation: () => range(row, col, numRows, numCols),
+    };
+  }
+
+  return {
+    name,
+    _dump: () => grid.slice(0, Math.max(lastRow(), 0)).map(r => r.slice(0, Math.max(lastCol(), 1))),
+    _grid: () => grid,
+    _failNextWrite: () => { failNext = true; },
+    getMaxRows: () => maxRows,
+    getMaxColumns: () => maxCols,
+    getLastRow: lastRow,
+    getDataRange: () => {
+      const lr = lastRow(), lc = lastCol();
+      if (!lr || !lc) return { getValues: () => [['']] };
+      return range(1, 1, lr, lc);
+    },
+    getRange: range,
+    appendRow: (r) => {
+      const at = lastRow();
+      if (at >= maxRows) throw new Error('Those rows are out of bounds.');
+      for (let j = 0; j < r.length; j++) grid[at][j] = r[j];
+    },
+    insertRowsAfter: (after, n) => {
+      const blanks = Array.from({ length: n }, () => Array(maxCols).fill(''));
+      grid.splice(after, 0, ...blanks);
+      maxRows += n;
+    },
+    insertRowBefore: (r) => {
+      grid.splice(r - 1, 0, Array(maxCols).fill(''));
+      maxRows += 1;
+    },
+    setFrozenRows: () => {},
+    setColumnWidth: () => {},
+    setConditionalFormatRules: () => {},
+    clearContents: () => { grid = Array.from({ length: maxRows }, () => Array(maxCols).fill('')); },
   };
-  return api;
 }
 
 const TEST_SHEET_ID = 'sheet-id-for-tests';
@@ -135,10 +210,17 @@ console.log('\n2. Save the real plan, read it back byte-identical');
   ok('save ok', saved.ok === true, saved);
   const got = c.call({ op: 'get', pid: 'trip-live' });
   ok('round-trips exactly', JSON.stringify(got.data) === JSON.stringify(realPlan));
-  ok('12 items', got.data.items.length === 12, got.data && got.data.items.length);
-  ok('4 households', got.data.households.length === 4);
-  ok('conf numbers intact', got.data.items.filter(i => i.conf).length === 4);
-  ok('contributes flag intact', got.data.households.some(h => h.contributes === true));
+  // Expectations come from the plan that was loaded, never hard-coded counts: the
+  // sample is whatever the newest backup happens to be, and the group keeps editing
+  // the real trip. A test that fails because someone booked a car is a broken test.
+  ok('every item survives', got.data.items.length === realPlan.items.length,
+    got.data.items.length + ' vs ' + realPlan.items.length);
+  ok('every household survives', got.data.households.length === realPlan.households.length);
+  ok('confirmation numbers intact',
+    got.data.items.filter(i => i.conf).length === realPlan.items.filter(i => i.conf).length);
+  ok('payments intact', (got.data.payments || []).length === (realPlan.payments || []).length);
+  ok('per-household flags survive',
+    JSON.stringify(got.data.households) === JSON.stringify(realPlan.households));
 }
 
 console.log('\n3. Chunking: force CHUNK=500 so the real plan spans many rows');
@@ -306,6 +388,55 @@ console.log('\n12. A script attached to nothing says so plainly');
   ok('refuses rather than crashing obscurely', r.ok === false, r);
   ok('the message names SHEET_ID', /SHEET_ID/.test(r.error || ''), r.error);
   ok('the message names the bound alternative', /Extensions/.test(r.error || ''), r.error);
+}
+
+console.log('\n13. REGRESSION: a tab that lost its header is repaired, not silently truncated');
+{
+  // Taking the row width from row 1 meant a header-less tab stored ONLY column A: the
+  // plan id was kept and the entire trip JSON thrown away, while the save still
+  // answered {ok:true}. Every later read then failed to parse.
+  const c = load();
+  c.call({ op: 'save', pid: 'p', payload: realPlan });
+  const sheet = c.sheets.plans;
+
+  const width = sheet.getMaxColumns();
+  sheet.getRange(1, 1, 1, width).setValues([Array(width).fill('')]);
+  ok('header really is gone', String(sheet.getRange(1, 1, 1, 1).getValues()[0][0]) !== 'plan_id');
+
+  const saved = c.call({ op: 'save', pid: 'p', payload: realPlan });
+  ok('save still succeeds', saved.ok === true, saved);
+  ok('header was repaired', String(sheet.getRange(1, 1, 1, 1).getValues()[0][0]) === 'plan_id');
+
+  const got = c.call({ op: 'get', pid: 'p' });
+  ok('the whole plan survived, not just column A',
+    got.ok === true && got.data && JSON.stringify(got.data) === JSON.stringify(realPlan),
+    got.ok ? (got.data && Object.keys(got.data)) : got.error);
+}
+
+console.log('\n14. REGRESSION: a failed write does not wipe every plan in the tab');
+{
+  // clearContents() followed by setValues() left the tab EMPTY between the two calls.
+  // One transient Sheets error in that window destroyed every plan, with no rollback —
+  // and the caller saw an ordinary "not saved", so the natural response was to retry.
+  const c = load();
+  c.call({ op: 'save', pid: 'keep-me', payload: { items: [{ id: 'a' }], tag: 'precious' } });
+  c.call({ op: 'save', pid: 'other', payload: { items: [{ id: 'b' }], tag: 'also precious' } });
+
+  c.sheets.plans._failNextWrite();
+  const failed = c.call({ op: 'save', pid: 'other', payload: { items: [{ id: 'b' }, { id: 'c' }] } });
+  ok('the failing save reports failure', failed.ok === false, failed);
+
+  const keep = c.call({ op: 'get', pid: 'keep-me' });
+  ok('an UNRELATED plan still exists after the failure',
+    keep.ok === true && keep.data && keep.data.tag === 'precious', keep);
+  ok('header survived the failure',
+    String(c.sheets.plans.getRange(1, 1, 1, 1).getValues()[0][0]) === 'plan_id');
+
+  const retry = c.call({ op: 'save', pid: 'other', payload: { items: [{ id: 'b' }, { id: 'c' }], tag: 'retried' } });
+  ok('a retry then works', retry.ok === true, retry);
+  ok('both plans readable afterwards',
+    c.call({ op: 'get', pid: 'keep-me' }).data.tag === 'precious' &&
+    c.call({ op: 'get', pid: 'other' }).data.tag === 'retried');
 }
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

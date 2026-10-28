@@ -669,6 +669,9 @@ function render() {
     (note ? `<div class="total-note">${note}</div>` : "");
   root.appendChild(totalPanel);
 
+  const sched = buildSchedulePanel();
+  if (sched) root.appendChild(sched);
+
   const refs = buildConfirmationPanel();
   if (refs) root.appendChild(refs);
 
@@ -695,6 +698,7 @@ function renderMessage(html) {
 
 function startPlan() {
   if (!plan || !Array.isArray(plan.items)) { renderEmpty(); return; }
+  if (!Array.isArray(plan.tasks)) plan.tasks = [];
   for (const it of plan.items) {
     it.date = it.date || "";
     it.endDate = it.endDate || "";
@@ -764,6 +768,7 @@ function currentPayload() {
     groupSel: plan.groupSel,
     groupOff: plan.groupOff,
     payments: plan.payments,
+    tasks: plan.tasks,
   };
 }
 
@@ -774,6 +779,7 @@ function currentPayload() {
 // ledger fourteen people are relying on.
 let dirtyItems = new Set();   // item ids touched here (including ones deleted here)
 let dirtyPayments = new Set();  // payment ids touched here (including ones deleted here)
+let dirtyTasks = new Set();     // schedule task ids touched here (including ones deleted here)
 let dirtyStructure = false;   // title, roster, split basis, choice-group selections
 
 function markItem(id) {
@@ -823,6 +829,21 @@ function mergeInto(stored) {
     }
   }
 
+  const baseTasks = Array.isArray(base.tasks) ? base.tasks : (base.tasks = []);
+  const myTasks = {};
+  for (const t of planTasks()) myTasks[t.id] = t;
+  for (const id of dirtyTasks) {
+    const local = myTasks[id];
+    const at = baseTasks.findIndex(function (x) { return x.id === id; });
+    if (!local) {
+      if (at >= 0) baseTasks.splice(at, 1);
+    } else if (at >= 0) {
+      baseTasks[at] = JSON.parse(JSON.stringify(local));
+    } else {
+      baseTasks.push(JSON.parse(JSON.stringify(local)));
+    }
+  }
+
   if (dirtyStructure) {
     base.title = plan.title;
     base.households = plan.households;
@@ -845,6 +866,28 @@ async function cloudSave() {
     throw new Error("could not read the current plan before saving");
   }
 
+  // A null here means "no plan under that id". For a plan we are LOOKING AT, that is
+  // not a fact about the world — it is a symptom. The backend answers null for a read
+  // that lands while another phone's save is mid-rewrite, and mergeInto treats a null
+  // base as "nothing stored yet" and falls back to this browser's whole document. The
+  // result would be one tab silently restoring its own stale copy over everyone
+  // else's work: exactly the bug the per-item merge was written to stop.
+  //
+  // So: read once more before believing it, and refuse to write if it is still null.
+  if (stored === null && plan && Array.isArray(plan.items) && plan.items.length) {
+    try {
+      stored = await cloudFetch(planId);
+    } catch (e) {
+      throw new Error("could not read the current plan before saving");
+    }
+    if (stored === null) {
+      throw new Error(
+        "the plan could not be read just now, so nothing was written — " +
+        "wait a moment and try again"
+      );
+    }
+  }
+
   const merged = mergeInto(stored);
 
   await BACKEND.save(planId, merged);
@@ -854,6 +897,7 @@ async function cloudSave() {
   plan = merged;
   dirtyItems = new Set();
   dirtyPayments = new Set();
+  dirtyTasks = new Set();
   dirtyStructure = false;
   return hadOthers;
 }
@@ -1798,4 +1842,629 @@ function savePaymentSoon(id) {
       setSaveState("NOT SAVED — " + e.message + ". Your change is still on screen; try again.", "bad");
     }
   }, 700);
+}
+
+// --- The schedule: what still has to be done, and by when --------------------
+//
+// The cost tracker above records what a thing COSTS. It says nothing about the fact
+// that somebody has to ring the host by a date, or that a deposit is due before a
+// cancellation window shuts. Fourteen people were holding that in their heads.
+//
+// Tasks live in the plan, next to the items, for the same reason everything else
+// does: they are shared, they merge per record, they are versioned by the backend and
+// they ride along in every backup. A private list in a spreadsheet would be invisible
+// to the thirteen other people the deadlines belong to.
+
+const TASK_KINDS = [
+  { v: "payment", label: "Payment" },
+  { v: "booking", label: "Booking" },
+  { v: "reimbursement", label: "Reimbursement" },
+  { v: "admin", label: "Admin" },
+];
+
+const TASK_STATUSES = [
+  { v: "todo", label: "Not started" },
+  { v: "doing", label: "In progress" },
+  { v: "waiting", label: "Waiting on someone" },
+  { v: "done", label: "Done" },
+  { v: "skip", label: "Not doing" },
+];
+
+// "soon" is a fortnight. Long enough to act on a booking, short enough that the
+// amber band stays small enough to mean something.
+const SOON_DAYS = 14;
+
+let scheduleView = "list";   // "list" | "calendar"
+let calCursor = "";          // "YYYY-MM" currently shown in the calendar
+let calSelected = "";        // "YYYY-MM-DD" day whose tasks are listed under the grid
+let editingTaskId = null;
+
+function planTasks() {
+  return Array.isArray(plan.tasks) ? plan.tasks : (plan.tasks = []);
+}
+
+function newTaskId() {
+  return "t" + Date.now() + Math.floor(Math.random() * 1000);
+}
+
+function todayISO() {
+  const d = new Date();
+  return (
+    d.getFullYear() + "-" +
+    String(d.getMonth() + 1).padStart(2, "0") + "-" +
+    String(d.getDate()).padStart(2, "0")
+  );
+}
+
+function isTaskClosed(t) {
+  return t.status === "done" || t.status === "skip";
+}
+
+function daysUntil(iso) {
+  if (!iso) return null;
+  const MS = 86400000;
+  return Math.round((parseISO(iso) - parseISO(todayISO())) / MS);
+}
+
+// Drives both the grouping in the list and the colour in the calendar, so the two
+// views can never disagree about what counts as urgent.
+function taskUrgency(t) {
+  if (isTaskClosed(t)) return "closed";
+  if (!t.due) return "undated";
+  const d = daysUntil(t.due);
+  if (d < 0) return "overdue";
+  if (d <= SOON_DAYS) return "soon";
+  return "later";
+}
+
+function taskOwnerName(t) {
+  if (t.owner === "all") return "Everyone";
+  const h = (plan.households || []).find(function (x) { return x.id === t.owner; });
+  return h ? h.name : "";
+}
+
+function labelFor(list, v, fallback) {
+  const hit = list.find(function (x) { return x.v === v; });
+  return hit ? hit.label : fallback;
+}
+
+function addTask(fields) {
+  const t = {
+    id: newTaskId(),
+    title: fields.title,
+    kind: fields.kind || "admin",
+    owner: fields.owner || "",
+    due: fields.due || "",
+    amount: fields.amount === "" || fields.amount == null ? "" : Number(fields.amount),
+    status: "todo",
+    doneOn: "",
+    linked: fields.linked || "",
+    notes: fields.notes || "",
+  };
+  planTasks().push(t);
+  saveTaskSoon(t.id);
+  render();
+}
+
+function deleteTask(id) {
+  plan.tasks = planTasks().filter(function (t) { return t.id !== id; });
+  if (editingTaskId === id) editingTaskId = null;
+  saveTaskSoon(id);
+  render();
+}
+
+// Same debounce and loud-failure handling as an item edit; only the dirty channel
+// differs, so a task edit can never quietly overwrite someone's booking change.
+function saveTaskSoon(id) {
+  if (!canEdit()) return;
+  if (id) dirtyTasks.add(id);
+  setSaveState("Saving…", "pending");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async function () {
+    try {
+      await cloudSave();
+      setSaveState("Saved for everyone", "ok");
+      render();
+    } catch (e) {
+      setSaveState("NOT SAVED — " + e.message + ". Your change is still on screen; try again.", "bad");
+    }
+  }, 700);
+}
+
+// Ticking something off stamps the date it happened, so "what did we do and when"
+// survives. Un-ticking clears it rather than leaving a date that contradicts status.
+function setTaskStatus(t, status) {
+  t.status = status;
+  if (status === "done") {
+    if (!t.doneOn) t.doneOn = todayISO();
+  } else {
+    t.doneOn = "";
+  }
+  saveTaskSoon(t.id);
+  render();
+}
+
+function sortedTasks() {
+  // Undated sinks to the bottom rather than the top, where a blank date would
+  // otherwise read as "due first".
+  return planTasks().slice().sort(function (a, b) {
+    const ad = a.due || "9999-12-31";
+    const bd = b.due || "9999-12-31";
+    if (ad !== bd) return ad < bd ? -1 : 1;
+    return (a.title || "").localeCompare(b.title || "");
+  });
+}
+
+function buildSchedulePanel() {
+  const tasks = planTasks();
+  if (!tasks.length && !canEdit()) return null;
+
+  const panel = document.createElement("div");
+  panel.className = "panel sched";
+
+  const head = document.createElement("div");
+  head.className = "sched-head";
+  head.innerHTML = '<div class="sched-title">What needs doing</div>';
+
+  const toggle = document.createElement("div");
+  toggle.className = "sched-toggle";
+  [["list", "List"], ["calendar", "Calendar"]].forEach(function (pair) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = pair[1];
+    b.className = scheduleView === pair[0] ? "on" : "";
+    b.addEventListener("click", function () {
+      scheduleView = pair[0];
+      render();
+    });
+    toggle.appendChild(b);
+  });
+  head.appendChild(toggle);
+  panel.appendChild(head);
+
+  const counts = { overdue: 0, soon: 0, later: 0, undated: 0, closed: 0 };
+  tasks.forEach(function (t) { counts[taskUrgency(t)]++; });
+
+  const bits = [];
+  if (counts.overdue) bits.push('<span class="s-over">' + counts.overdue + " overdue</span>");
+  if (counts.soon) bits.push('<span class="s-soon">' + counts.soon + " due soon</span>");
+  if (counts.later) bits.push(counts.later + " later");
+  if (counts.undated) bits.push(counts.undated + " with no date");
+  if (counts.closed) bits.push(counts.closed + " done");
+
+  const sum = document.createElement("div");
+  sum.className = "sched-sum";
+  sum.innerHTML = bits.length ? bits.join(" · ") : "Nothing on the list yet.";
+  panel.appendChild(sum);
+
+  panel.appendChild(scheduleView === "calendar" ? buildTaskCalendar() : buildTaskList());
+
+  if (canEdit()) panel.appendChild(buildTaskAddForm());
+  return panel;
+}
+
+// --- List view --------------------------------------------------------------
+
+function buildTaskList() {
+  const wrap = document.createElement("div");
+  const all = sortedTasks();
+  if (!all.length) return wrap;
+
+  const bands = [
+    { key: "overdue", label: "Overdue" },
+    { key: "soon", label: "Next " + SOON_DAYS + " days" },
+    { key: "later", label: "Later" },
+    { key: "undated", label: "No date yet" },
+    { key: "closed", label: "Done" },
+  ];
+
+  bands.forEach(function (band) {
+    const inBand = all.filter(function (t) { return taskUrgency(t) === band.key; });
+    if (!inBand.length) return;
+    const h = document.createElement("div");
+    h.className = "sched-band " + band.key;
+    h.textContent = band.label + " (" + inBand.length + ")";
+    wrap.appendChild(h);
+    inBand.forEach(function (t) { wrap.appendChild(buildTaskRow(t)); });
+  });
+
+  return wrap;
+}
+
+function buildTaskRow(t) {
+  const row = document.createElement("div");
+  row.className = "task " + taskUrgency(t) + (isTaskClosed(t) ? " is-closed" : "");
+
+  const tick = document.createElement("input");
+  tick.type = "checkbox";
+  tick.className = "task-tick";
+  tick.checked = t.status === "done";
+  tick.disabled = !canEdit();
+  tick.title = t.status === "done" ? "Mark as not done" : "Mark as done";
+  tick.addEventListener("change", function () {
+    setTaskStatus(t, tick.checked ? "done" : "todo");
+  });
+  row.appendChild(tick);
+
+  const main = document.createElement("div");
+  main.className = "task-main";
+
+  let meta = '<span class="task-kind k-' + escapeHTML(t.kind || "admin") + '">' +
+    escapeHTML(labelFor(TASK_KINDS, t.kind, "Admin")) + "</span>";
+
+  const owner = taskOwnerName(t);
+  if (owner) meta += '<span class="task-who">' + escapeHTML(owner) + "</span>";
+
+  if (t.due) {
+    const d = daysUntil(t.due);
+    let when = fmtDate(t.due);
+    if (!isTaskClosed(t)) {
+      if (d < 0) when += " · " + Math.abs(d) + (Math.abs(d) === 1 ? " day late" : " days late");
+      else if (d === 0) when += " · today";
+      else when += " · in " + d + (d === 1 ? " day" : " days");
+    }
+    meta += '<span class="task-due">' + escapeHTML(when) + "</span>";
+  }
+
+  if (t.status !== "todo" && t.status !== "done") {
+    meta += '<span class="task-state">' + escapeHTML(labelFor(TASK_STATUSES, t.status, "")) + "</span>";
+  }
+  if (t.status === "done" && t.doneOn) {
+    meta += '<span class="task-state">done ' + escapeHTML(fmtDate(t.doneOn)) + "</span>";
+  }
+
+  main.innerHTML =
+    '<div class="task-title">' + escapeHTML(t.title || "(untitled)") + "</div>" +
+    '<div class="task-meta">' + meta + "</div>" +
+    (t.linked ? '<div class="task-link">for: ' + escapeHTML(t.linked) + "</div>" : "") +
+    (t.notes ? '<div class="task-notes">' + escapeHTML(t.notes) + "</div>" : "");
+  row.appendChild(main);
+
+  const right = document.createElement("div");
+  right.className = "task-right";
+  if (t.amount !== "" && t.amount != null && !isNaN(Number(t.amount))) {
+    right.innerHTML = '<span class="task-amt">' + fmtUSD(Math.round(Number(t.amount))) + "</span>";
+  }
+  if (canEdit()) {
+    const ed = document.createElement("button");
+    ed.type = "button";
+    ed.className = "task-edit";
+    ed.textContent = editingTaskId === t.id ? "Close" : "Edit";
+    ed.addEventListener("click", function () {
+      editingTaskId = editingTaskId === t.id ? null : t.id;
+      render();
+    });
+    right.appendChild(ed);
+  }
+  row.appendChild(right);
+
+  if (editingTaskId === t.id && canEdit()) {
+    const panel = buildTaskEditor(t);
+    const holder = document.createElement("div");
+    holder.className = "task-edwrap";
+    holder.appendChild(panel);
+    row.appendChild(holder);
+  }
+
+  return row;
+}
+
+// Fields commit on BLUR, not on every keystroke. A re-render mid-typing steals the
+// keyboard on a phone, which is how the item editor had to be fixed too.
+function buildTaskEditor(t) {
+  const box = document.createElement("div");
+  box.className = "task-ed";
+
+  function field(label, el) {
+    const w = document.createElement("label");
+    w.className = "task-edf";
+    w.innerHTML = "<span>" + escapeHTML(label) + "</span>";
+    w.appendChild(el);
+    return w;
+  }
+
+  function text(value, placeholder, type) {
+    const i = document.createElement("input");
+    i.type = type || "text";
+    i.value = value == null ? "" : value;
+    if (placeholder) i.placeholder = placeholder;
+    return i;
+  }
+
+  const title = text(t.title, "What has to happen");
+  title.addEventListener("blur", function () {
+    const v = title.value.trim();
+    if (v !== t.title) { t.title = v; saveTaskSoon(t.id); render(); }
+  });
+
+  const due = text(t.due, "", "date");
+  due.addEventListener("change", function () {
+    if (due.value !== t.due) { t.due = due.value; saveTaskSoon(t.id); render(); }
+  });
+
+  const amount = text(t.amount, "optional", "number");
+  amount.step = "0.01";
+  amount.addEventListener("blur", function () {
+    const v = amount.value.trim() === "" ? "" : Number(amount.value);
+    if (v !== t.amount) { t.amount = v; saveTaskSoon(t.id); render(); }
+  });
+
+  const kind = document.createElement("select");
+  TASK_KINDS.forEach(function (k) {
+    const o = document.createElement("option");
+    o.value = k.v; o.textContent = k.label;
+    if ((t.kind || "admin") === k.v) o.selected = true;
+    kind.appendChild(o);
+  });
+  kind.addEventListener("change", function () { t.kind = kind.value; saveTaskSoon(t.id); render(); });
+
+  const status = document.createElement("select");
+  TASK_STATUSES.forEach(function (s) {
+    const o = document.createElement("option");
+    o.value = s.v; o.textContent = s.label;
+    if ((t.status || "todo") === s.v) o.selected = true;
+    status.appendChild(o);
+  });
+  status.addEventListener("change", function () { setTaskStatus(t, status.value); });
+
+  const owner = document.createElement("select");
+  const ownerOpts = [{ v: "", label: "Nobody yet" }, { v: "all", label: "Everyone" }].concat(
+    (plan.households || []).map(function (h) { return { v: h.id, label: h.name }; })
+  );
+  ownerOpts.forEach(function (o) {
+    const el = document.createElement("option");
+    el.value = o.v; el.textContent = o.label;
+    if ((t.owner || "") === o.v) el.selected = true;
+    owner.appendChild(el);
+  });
+  owner.addEventListener("change", function () { t.owner = owner.value; saveTaskSoon(t.id); render(); });
+
+  const linked = document.createElement("select");
+  const linkOpts = [{ v: "", label: "Not linked" }].concat(
+    plan.items.map(function (it) { return { v: it.title, label: it.title }; })
+  );
+  linkOpts.forEach(function (o) {
+    const el = document.createElement("option");
+    el.value = o.v; el.textContent = o.label;
+    if ((t.linked || "") === o.v) el.selected = true;
+    linked.appendChild(el);
+  });
+  linked.addEventListener("change", function () { t.linked = linked.value; saveTaskSoon(t.id); render(); });
+
+  const notes = document.createElement("textarea");
+  notes.rows = 2;
+  notes.value = t.notes || "";
+  notes.placeholder = "Anything worth remembering — a reference, who to ring, what to check";
+  notes.addEventListener("blur", function () {
+    const v = notes.value.trim();
+    if (v !== t.notes) { t.notes = v; saveTaskSoon(t.id); render(); }
+  });
+
+  const grid = document.createElement("div");
+  grid.className = "task-edgrid";
+  grid.append(
+    field("Task", title),
+    field("Due", due),
+    field("Type", kind),
+    field("Amount", amount),
+    field("Who's doing it", owner),
+    field("Status", status),
+    field("For which booking", linked)
+  );
+  box.appendChild(grid);
+
+  const nf = field("Notes", notes);
+  nf.className = "task-edf wide";
+  box.appendChild(nf);
+
+  const foot = document.createElement("div");
+  foot.className = "task-edfoot";
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "task-del";
+  del.textContent = "Remove this task";
+  let armed = false;
+  let armTimer = null;
+  del.addEventListener("click", function () {
+    if (!armed) {
+      armed = true;
+      del.textContent = "Tap again to remove";
+      del.classList.add("armed");
+      armTimer = setTimeout(function () {
+        armed = false;
+        del.textContent = "Remove this task";
+        del.classList.remove("armed");
+      }, 8000);
+      return;
+    }
+    clearTimeout(armTimer);
+    deleteTask(t.id);
+  });
+  foot.appendChild(del);
+  box.appendChild(foot);
+
+  return box;
+}
+
+function buildTaskAddForm() {
+  const wrap = document.createElement("details");
+  wrap.className = "task-add";
+  const sum = document.createElement("summary");
+  sum.textContent = "+ Add something that needs doing";
+  wrap.appendChild(sum);
+
+  const form = document.createElement("form");
+  form.className = "task-addform";
+  form.innerHTML =
+    '<input name="title" type="text" placeholder="What has to happen" required>' +
+    '<input name="due" type="date">' +
+    '<select name="kind">' + TASK_KINDS.map(function (k) {
+      return '<option value="' + k.v + '">' + k.label + "</option>";
+    }).join("") + "</select>" +
+    '<input name="amount" type="number" step="0.01" placeholder="Amount (optional)">' +
+    '<select name="owner"><option value="">Nobody yet</option><option value="all">Everyone</option>' +
+    (plan.households || []).map(function (h) {
+      return '<option value="' + escapeHTML(h.id) + '">' + escapeHTML(h.name) + "</option>";
+    }).join("") + "</select>" +
+    '<button type="submit">Add it</button>';
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    const title = form.title.value.trim();
+    if (!title) return;
+    addTask({
+      title: title,
+      due: form.due.value,
+      kind: form.kind.value,
+      amount: form.amount.value,
+      owner: form.owner.value,
+    });
+    form.reset();
+  });
+
+  wrap.appendChild(form);
+  return wrap;
+}
+
+// --- Calendar view ----------------------------------------------------------
+
+function monthOf(iso) { return iso ? iso.slice(0, 7) : ""; }
+
+function shiftMonth(ym, delta) {
+  let y = Number(ym.slice(0, 4));
+  let m = Number(ym.slice(5, 7)) + delta;
+  while (m < 1) { m += 12; y -= 1; }
+  while (m > 12) { m -= 12; y += 1; }
+  return y + "-" + String(m).padStart(2, "0");
+}
+
+// Open on the month that actually has the next thing due, not on today — for a trip
+// six months out, "today" is an empty grid and looks broken.
+function defaultCalMonth() {
+  const open = sortedTasks().filter(function (t) { return t.due && !isTaskClosed(t); });
+  if (open.length) {
+    const overdue = open.filter(function (t) { return daysUntil(t.due) < 0; });
+    const next = overdue.length ? overdue[0] : open[0];
+    return monthOf(next.due);
+  }
+  const dated = sortedTasks().filter(function (t) { return t.due; });
+  return dated.length ? monthOf(dated[0].due) : monthOf(todayISO());
+}
+
+function buildTaskCalendar() {
+  if (!calCursor) calCursor = defaultCalMonth();
+
+  const wrap = document.createElement("div");
+  wrap.className = "cal";
+
+  const year = Number(calCursor.slice(0, 4));
+  const month = Number(calCursor.slice(5, 7));
+
+  const byDay = {};
+  planTasks().forEach(function (t) {
+    if (!t.due) return;
+    (byDay[t.due] = byDay[t.due] || []).push(t);
+  });
+
+  const nav = document.createElement("div");
+  nav.className = "cal-nav";
+  const prev = document.createElement("button");
+  prev.type = "button"; prev.textContent = "‹";
+  prev.setAttribute("aria-label", "Previous month");
+  prev.addEventListener("click", function () { calCursor = shiftMonth(calCursor, -1); calSelected = ""; render(); });
+  const next = document.createElement("button");
+  next.type = "button"; next.textContent = "›";
+  next.setAttribute("aria-label", "Next month");
+  next.addEventListener("click", function () { calCursor = shiftMonth(calCursor, 1); calSelected = ""; render(); });
+  const label = document.createElement("div");
+  label.className = "cal-month";
+  label.textContent = new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  nav.append(prev, label, next);
+  wrap.appendChild(nav);
+
+  const grid = document.createElement("div");
+  grid.className = "cal-grid";
+  ["S", "M", "T", "W", "T", "F", "S"].forEach(function (d, i) {
+    const h = document.createElement("div");
+    h.className = "cal-dow";
+    h.textContent = d;
+    h.setAttribute("aria-label", ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][i]);
+    grid.appendChild(h);
+  });
+
+  const first = new Date(year, month - 1, 1);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  for (let i = 0; i < first.getDay(); i++) {
+    const pad = document.createElement("div");
+    pad.className = "cal-cell pad";
+    grid.appendChild(pad);
+  }
+
+  const today = todayISO();
+  for (let day = 1; day <= daysInMonth; day++) {
+    const iso = calCursor + "-" + String(day).padStart(2, "0");
+    const here = byDay[iso] || [];
+    const cell = document.createElement("div");
+    cell.className = "cal-cell" +
+      (iso === today ? " is-today" : "") +
+      (iso === calSelected ? " is-sel" : "") +
+      (here.length ? " has" : "");
+
+    let worst = "";
+    here.forEach(function (t) {
+      const u = taskUrgency(t);
+      if (u === "overdue") worst = "overdue";
+      else if (u === "soon" && worst !== "overdue") worst = "soon";
+      else if (!worst && !isTaskClosed(t)) worst = "later";
+    });
+    if (worst) cell.classList.add("u-" + worst);
+    if (here.length && here.every(isTaskClosed)) cell.classList.add("u-closed");
+
+    let inner = '<div class="cal-num">' + day + "</div>";
+    here.slice(0, 2).forEach(function (t) {
+      inner += '<div class="cal-pill ' + taskUrgency(t) + '">' + escapeHTML(t.title || "") + "</div>";
+    });
+    if (here.length > 2) inner += '<div class="cal-more">+' + (here.length - 2) + " more</div>";
+    cell.innerHTML = inner;
+
+    if (here.length) {
+      cell.setAttribute("role", "button");
+      cell.tabIndex = 0;
+      const open = function () { calSelected = calSelected === iso ? "" : iso; render(); };
+      cell.addEventListener("click", open);
+      cell.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+      });
+    }
+    grid.appendChild(cell);
+  }
+  wrap.appendChild(grid);
+
+  // The grid can only ever show a truncated title. Anything with a date that is not
+  // in view this month would otherwise be invisible, so say so rather than imply the
+  // month is the whole list.
+  const elsewhere = planTasks().filter(function (t) { return t.due && monthOf(t.due) !== calCursor; }).length;
+  const undated = planTasks().filter(function (t) { return !t.due; }).length;
+  const notes = [];
+  if (elsewhere) notes.push(elsewhere + (elsewhere === 1 ? " task is" : " tasks are") + " in other months");
+  if (undated) notes.push(undated + (undated === 1 ? " task has" : " tasks have") + " no date");
+  if (notes.length) {
+    const n = document.createElement("div");
+    n.className = "cal-note";
+    n.textContent = notes.join(" · ") + " — switch to List to see everything.";
+    wrap.appendChild(n);
+  }
+
+  if (calSelected && byDay[calSelected]) {
+    const day = document.createElement("div");
+    day.className = "cal-day";
+    const h = document.createElement("div");
+    h.className = "cal-dayhead";
+    h.textContent = fmtDate(calSelected);
+    day.appendChild(h);
+    byDay[calSelected].forEach(function (t) { day.appendChild(buildTaskRow(t)); });
+    wrap.appendChild(day);
+  }
+
+  return wrap;
 }

@@ -52,8 +52,17 @@ if (-not $bash) {
   exit 1
 }
 
-$script = Join-Path $repo "tools\backup-plan.sh"
-$out = & $bash -lc "cd '$($repo -replace '\','/')' && bash tools/backup-plan.sh '$planId'" 2>&1
+# .Replace() is a literal string method, NOT a regex. The first version of this line
+# used -replace '\','/', and "\" on its own is an invalid regular expression — so with
+# $ErrorActionPreference = "Stop" the task died on this line every time, before running
+# a single backup and before writing anything to the log. A scheduled job that fails
+# silently is worse than no scheduled job, because you believe you have backups.
+$repoUnix = $repo.Replace('\', '/')
+
+# No 2>&1 here. In Windows PowerShell 5.1, redirecting a native command's stderr wraps
+# each line in an ErrorRecord, which under "Stop" becomes a terminating error even when
+# bash exited 0 — so an ordinary warning from git-bash would have killed the task.
+$out = & $bash -lc "cd '$repoUnix' && bash tools/backup-plan.sh '$planId'"
 $code = $LASTEXITCODE
 
 foreach ($line in $out) { Log $line }
