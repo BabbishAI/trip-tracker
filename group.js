@@ -2609,6 +2609,37 @@ function buildTaskCalendar() {
     (byDay[t.due] = byDay[t.due] || []).push(t);
   });
 
+  // The trip itself, not the to-do list. A stay or a park day is not a task and has no
+  // business in the schedule list, but it is exactly what you want to see on a
+  // calendar: the shape of the week the deadlines are leading up to.
+  //
+  // A range fills every day it covers, so a house booked the 17th to the 19th appears
+  // on all three. That means a changeover day shows both houses, which is correct and
+  // is precisely the day worth looking at twice.
+  const stayByDay = {};
+  let skippedItems = 0;
+  (plan.items || []).forEach(function (it) {
+    if (!it.date) return;
+    if (!isIncluded(it)) { skippedItems++; return; }
+
+    const end = (it.endDate && it.endDate > it.date) ? it.endDate : it.date;
+    const cursor = parseISO(it.date);
+    const stop = parseISO(end);
+
+    // A mistyped year could otherwise ask the browser to walk a few thousand days.
+    for (var guard = 0; cursor <= stop && guard < 400; guard++) {
+      const key = cursor.getFullYear() + "-" +
+        String(cursor.getMonth() + 1).padStart(2, "0") + "-" +
+        String(cursor.getDate()).padStart(2, "0");
+      (stayByDay[key] = stayByDay[key] || []).push({
+        item: it,
+        first: key === it.date,
+        last: key === end,
+      });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  });
+
   const nav = document.createElement("div");
   nav.className = "cal-nav";
   const prev = document.createElement("button");
@@ -2647,11 +2678,14 @@ function buildTaskCalendar() {
   for (let day = 1; day <= daysInMonth; day++) {
     const iso = calCursor + "-" + String(day).padStart(2, "0");
     const here = byDay[iso] || [];
+    const stays = stayByDay[iso] || [];
     const cell = document.createElement("div");
     cell.className = "cal-cell" +
       (iso === today ? " is-today" : "") +
       (iso === calSelected ? " is-sel" : "") +
-      (here.length ? " has" : "");
+      (here.length || stays.length ? " has" : "") +
+      (stays.length ? " has-trip" : "") +
+      (here.length ? " has-task" : "");
 
     const RANK = { overdue: 4, asap: 3, soon: 2, later: 1 };
     let worst = "", worstRank = 0;
@@ -2663,14 +2697,35 @@ function buildTaskCalendar() {
     if (worst) cell.classList.add("u-" + worst);
     if (here.length && here.every(isTaskClosed)) cell.classList.add("u-closed");
 
+    // The trip comes first: it is what the day IS, where a task is something to do
+    // about it. Three pills is what fits before a cell starts scrolling.
     let inner = '<div class="cal-num">' + day + "</div>";
-    here.slice(0, 2).forEach(function (t) {
+    let shown = 0;
+    const ROOM = 3;
+
+    stays.forEach(function (s) {
+      if (shown >= ROOM) return;
+      shown++;
+      // Every day names what is happening on it, including the middle of a stay.
+      // A blank continuation bar looked tidy in the abstract and read as a mystery
+      // blue strip in practice — someone looking at the 21st wants to be told
+      // "Bradenton Beach house", not left to trace the bar back to the 19th.
+      const edge = (s.first ? " first" : "") + (s.last ? " last" : "") +
+        (s.first ? "" : " cont");
+      inner += '<div class="cal-trip' + edge + '">' + escapeHTML(s.item.title || "") + "</div>";
+    });
+
+    here.forEach(function (t) {
+      if (shown >= ROOM) return;
+      shown++;
       inner += '<div class="cal-pill ' + taskUrgency(t) + '">' + escapeHTML(t.title || "") + "</div>";
     });
-    if (here.length > 2) inner += '<div class="cal-more">+' + (here.length - 2) + " more</div>";
+
+    const hidden = (stays.length + here.length) - shown;
+    if (hidden > 0) inner += '<div class="cal-more">+' + hidden + " more</div>";
     cell.innerHTML = inner;
 
-    if (here.length) {
+    if (here.length || stays.length) {
       cell.setAttribute("role", "button");
       cell.tabIndex = 0;
       const open = function () { calSelected = calSelected === iso ? "" : iso; render(); };
@@ -2708,6 +2763,11 @@ function buildTaskCalendar() {
   const notes = [];
   if (elsewhere) notes.push(elsewhere + (elsewhere === 1 ? " task is" : " tasks are") + " in other months");
   if (undated) notes.push(undated + (undated === 1 ? " task has" : " tasks have") + " no date");
+  // Switched-off items are left off the grid on purpose, but silently dropping them
+  // would make the calendar quietly disagree with the Trip tab.
+  if (skippedItems) {
+    notes.push(skippedItems + (skippedItems === 1 ? " booking is" : " bookings are") + " switched off and not shown");
+  }
   if (notes.length) {
     const n = document.createElement("div");
     n.className = "cal-note";
@@ -2715,14 +2775,48 @@ function buildTaskCalendar() {
     wrap.appendChild(n);
   }
 
-  if (calSelected && byDay[calSelected]) {
+  // The calendar opens on whatever is due next, which for a trip still months away is
+  // a long way from the trip. Rather than make someone press the arrow five times.
+  const tripStart = (plan.items || [])
+    .filter(function (it) { return it.date && isIncluded(it); })
+    .map(function (it) { return it.date; })
+    .sort()[0];
+
+  if (tripStart && monthOf(tripStart) !== calCursor) {
+    const jump = document.createElement("button");
+    jump.type = "button";
+    jump.className = "cal-jump";
+    jump.textContent = "Jump to the trip — " +
+      parseISO(tripStart).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    jump.addEventListener("click", function () {
+      calCursor = monthOf(tripStart);
+      calSelected = "";
+      render();
+    });
+    wrap.appendChild(jump);
+  }
+
+  if (calSelected && (byDay[calSelected] || stayByDay[calSelected])) {
     const day = document.createElement("div");
     day.className = "cal-day";
     const h = document.createElement("div");
     h.className = "cal-dayhead";
     h.textContent = fmtDate(calSelected);
     day.appendChild(h);
-    byDay[calSelected].forEach(function (t) { day.appendChild(buildTaskRow(t)); });
+
+    (stayByDay[calSelected] || []).forEach(function (s) {
+      const r = document.createElement("div");
+      r.className = "cal-dayitem";
+      const span = isRange(s.item)
+        ? fmtDateRange(s.item.date, s.item.endDate)
+        : fmtDate(s.item.date);
+      r.innerHTML =
+        '<span class="di-title">' + escapeHTML(s.item.title || "") + "</span>" +
+        '<span class="di-when">' + escapeHTML(span) + "</span>";
+      day.appendChild(r);
+    });
+
+    (byDay[calSelected] || []).forEach(function (t) { day.appendChild(buildTaskRow(t)); });
     wrap.appendChild(day);
   }
 
