@@ -559,6 +559,24 @@
 
 
 
+
+    /* The gift's own columns in the share table. Green for what comes off, so the
+       subtraction is readable at a glance rather than needing the minus sign. */
+    .v-ledger .gift-col { color: #1a7a4a; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .v-ledger .after-col { font-weight: 700; font-variant-numeric: tabular-nums; }
+    /* Six columns does not fit a phone. Rather than shrink the type to nothing, the
+       table scrolls sideways and keeps the household name pinned so a row stays
+       readable while you move across it. */
+    .v-ledger.has-gift { min-width: 520px; }
+    .ledger-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    @media (max-width: 520px) {
+      .v-ledger.has-gift th, .v-ledger.has-gift td { white-space: nowrap; }
+      .v-ledger.has-gift td:first-child, .v-ledger.has-gift th:first-child {
+        position: sticky; left: 0; background: #fff; z-index: 1;
+      }
+      .v-ledger.has-gift tr.is-me td:first-child { background: #eef5ff; }
+    }
+
     /* --- The gift as a credit on the bill --------------------------------- */
     .credit-row {
       display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
@@ -873,6 +891,6 @@
   <script src="config.js?v=3"></script>
   <script src="backend.js?v=2"></script>
   <script src="booking.js?v=6"></script>
-  <script src="group.js?v=23"></script>
+  <script src="group.js?v=24"></script>
 </body>
 </html>

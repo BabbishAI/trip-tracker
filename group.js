@@ -494,11 +494,11 @@ function countedItems() {
     if (it.group) { if (vSel[it.group] === it.id) out.push(it); }
     else if (isIncluded(it)) out.push(it);
   }
-  // Last, so it reads as a credit applied at the bottom of the bill. Every panel that
-  // works out what a family owes goes through here, which is why one line here is
-  // enough to make the gift show up in all of them.
-  const credit = giftCreditItem();
-  if (credit) out.push(credit);
+  // The gift is deliberately NOT added here. It used to be, which spread it across
+  // every household by the trip's share basis — including the givers, who then part
+  // funded their own present. It is now applied by giftAllocation() after the raw
+  // shares are known, because the rule is not a split: it clears the giver's share
+  // first and spreads what is left evenly across the rest.
   return out;
 }
 
@@ -637,17 +637,49 @@ function buildLedgerPanel() {
 
   const panel = document.createElement("div");
   panel.className = "panel";
+  // The gift gets columns of its own rather than being folded silently into the
+  // share. Three figures that visibly subtract are worth more than one number nobody
+  // can derive.
+  const baseOwes = {};
+  rows.forEach(function (r) { baseOwes[r.id] = r.owes; });
+  const alloc = giftAllocation(baseOwes);
+  const giftOn = !!planGift();
+
   let html = '<div class="you-head">Everyone\u2019s share</div>';
-  html += '<table class="v-ledger"><thead><tr><th>Household</th><th>Share of trip</th><th>Paid so far</th><th>Owes the group</th></tr></thead><tbody>';
+  html += '<div class="ledger-scroll"><table class="v-ledger' + (giftOn ? " has-gift" : "") + '"><thead><tr>' +
+    "<th>Household</th><th>Share of trip</th>" +
+    (giftOn ? "<th>Gift</th><th>After gift</th>" : "") +
+    "<th>Paid so far</th><th>Owes the group</th></tr></thead><tbody>";
+
   for (const r of rows) {
     const net = Math.round(r.net);
     const cls = net > 0 ? "pos" : net < 0 ? "neg" : "";
     const netText = net === 0 ? "even" : net > 0 ? `owed ${fmtUSD(net)}` : `owes ${fmtUSD(-net)}`;
+    const credited = alloc.credit[r.id] || 0;
+    const after = Math.max(0, r.owes - credited);
+
     html += `<tr${r.id === me ? ' class="is-me"' : ""}><td>${escapeHTML(r.name)}</td>` +
-      `<td>${fmtUSD(Math.round(r.owes))}</td><td>${fmtUSD(Math.round(r.paid))}</td>` +
+      `<td>${fmtUSD(Math.round(r.owes))}</td>` +
+      (giftOn
+        ? `<td class="gift-col">${credited > 0.5 ? "\u2212" + fmtUSD(Math.round(credited)) : "\u2014"}</td>` +
+          `<td class="after-col">${fmtUSD(Math.round(after))}</td>`
+        : "") +
+      `<td>${fmtUSD(Math.round(r.paid))}</td>` +
       `<td class="net ${cls}">${netText}</td></tr>`;
   }
-  html += "</tbody></table>";
+  html += "</tbody></table></div>";
+
+  if (giftOn) {
+    const giver = giverName(planGift());
+    html += '<div class="you-note">The gift covers the ' + escapeHTML(giver || "giving household") +
+      "\u2019s own share first, and what is left is divided evenly between the other " +
+      (rows.length - 1) + " families." +
+      (alloc.unused > 0.5
+        ? " <strong>" + fmtUSD(Math.round(alloc.unused)) +
+          "</strong> of it is more than the trip costs, so it is not applied to anyone."
+        : "") +
+      "</div>";
+  }
 
   const transfers = Booking.settle(rows);
   if (transfers.length) {
@@ -662,14 +694,15 @@ function buildLedgerPanel() {
   // a family's share of the trip has dropped because of the gift, while the transfer
   // below has not moved an inch. Both are right, for different reasons, and the only
   // way to know that is to be told.
+  // The settling-up is the one place the gift deliberately does NOT reach, and that
+  // needs saying: "After gift" above and "owes the group" below are different
+  // questions, and without this they read as a contradiction.
   const giftNow = planGift();
   if (giftNow) {
-    html += '<div class="you-note">The ' + escapeHTML(giverName(giftNow) || "gift") +
-      '’s gift of <strong>' + fmtUSD(Math.round(Number(giftNow.amount))) +
-      "</strong> is already taken off every share above. It does not change the " +
-      "settling-up below, because that is about money people have actually laid out " +
-      "— and no gift money has changed hands yet. When it does, record it as a " +
-      "payment or set them as the payer on what it covers.</div>";
+    html += '<div class="you-note">Settling up is separate from the gift. It only ' +
+      "moves money people have actually laid out for each other, and no gift money " +
+      "has changed hands yet — so these transfers are unchanged. When it does " +
+      "change hands, record it as a payment and they will drop.</div>";
   }
 
   if (owedToVendors >= 1) {
@@ -3170,6 +3203,61 @@ function countUp(el, to, delayMs, durMs) {
     };
     requestAnimationFrame(step);
   }, delayMs);
+}
+
+/**
+ * How a gift is applied to each household.
+ *
+ * The rule, in the giver's words: cover their own share first, then spread whatever
+ * is left evenly across the other families. "Evenly" means equal pounds, not
+ * proportional to the share basis — a gift is a gift, not a second way of splitting
+ * the bill.
+ *
+ * Nobody can be credited more than they owe. If a family's share is smaller than its
+ * even slice, the surplus flows back to the others rather than evaporating, which is
+ * why this loops instead of dividing once. Anything that still cannot be used is
+ * reported, so an over-large gift says so rather than quietly vanishing.
+ *
+ * Takes the raw shares so it can be tested on its own, and returns only numbers.
+ */
+function giftAllocation(baseOwes) {
+  const g = planGift();
+  const out = { credit: {}, unused: 0, total: 0 };
+  Object.keys(baseOwes).forEach(function (id) { out.credit[id] = 0; });
+  if (!g) return out;
+
+  let remaining = Math.abs(Number(g.amount)) || 0;
+  out.total = remaining;
+  const giver = g.from;
+
+  // 1. The giver's own share.
+  if (giver && baseOwes[giver] != null) {
+    const take = Math.min(remaining, Math.max(0, baseOwes[giver]));
+    out.credit[giver] = take;
+    remaining -= take;
+  }
+
+  // 2. What is left, evenly across everyone else, capped at what each still owes.
+  let others = Object.keys(baseOwes).filter(function (id) {
+    return id !== giver && baseOwes[id] - out.credit[id] > 0.005;
+  });
+
+  let guard = 0;
+  while (remaining > 0.005 && others.length && guard++ < 50) {
+    const slice = remaining / others.length;
+    const stillOwing = [];
+    others.forEach(function (id) {
+      const room = baseOwes[id] - out.credit[id];
+      const take = Math.min(slice, room);
+      out.credit[id] += take;
+      remaining -= take;
+      if (room - take > 0.005) stillOwing.push(id);
+    });
+    others = stillOwing;
+  }
+
+  out.unused = Math.max(0, remaining);
+  return out;
 }
 
 // The credit as it appears under the itinerary: a row, not a booking. No Edit, no
