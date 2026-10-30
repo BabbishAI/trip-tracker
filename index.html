@@ -557,6 +557,171 @@
 
 
 
+
+    /* --- The gift panel on the Money tab ---------------------------------- */
+    .gp-card {
+      border-radius: 12px; padding: 18px 20px; text-align: center;
+      background: linear-gradient(160deg, #fdf6ec 0%, #f7ecf6 100%);
+      border: 1px solid #ead9c9;
+    }
+    .gp-amt { font-size: 1.9rem; font-weight: 700; color: #8a5a00; font-variant-numeric: tabular-nums; }
+    .gp-from { font-size: 0.8rem; color: #8a7a62; font-weight: 600; margin-top: 2px; }
+    .gp-msg {
+      margin-top: 10px; font-size: 0.92rem; line-height: 1.5; color: #4a4336;
+      font-style: italic; white-space: pre-wrap;
+    }
+    .gp-replay {
+      margin-top: 12px; padding: 8px 14px; min-height: 38px;
+      border: 1px solid var(--border); border-radius: 8px; background: #fff;
+      font: inherit; font-size: 0.82rem; font-weight: 600; color: var(--accent); cursor: pointer;
+    }
+    .gp-note { margin-top: 12px; font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+    .gp-form { margin-top: 14px; }
+    .gp-form > summary {
+      cursor: pointer; font-size: 0.84rem; font-weight: 600; color: var(--accent);
+      list-style: none; padding: 4px 0;
+    }
+    .gp-form > summary::-webkit-details-marker { display: none; }
+    .gp-fields {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px;
+      margin-top: 10px; padding: 14px; border-radius: 10px; background: #f7f8fa;
+    }
+    .gp-fields label { display: flex; flex-direction: column; gap: 4px;
+      font-size: 0.76rem; font-weight: 600; color: var(--muted); }
+    .gp-fields label.wide, .gp-actions { grid-column: 1 / -1; }
+    .gp-fields input, .gp-fields textarea {
+      padding: 8px 9px; min-height: 38px; width: 100%;
+      border: 1px solid var(--border); border-radius: 7px; background: #fff;
+      font-size: 0.92rem; font-family: inherit; color: var(--ink);
+    }
+    .gp-fields textarea { min-height: 64px; resize: vertical; }
+    .gp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .gp-actions button {
+      padding: 9px 16px; min-height: 40px; border: none; border-radius: 8px;
+      background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+    }
+    .gp-remove { background: #fff !important; color: #a3372c !important;
+      border: 1px solid #e9c9c4 !important; font-weight: 500 !important; }
+    .gp-remove.armed { background: #b3261e !important; color: #fff !important;
+      border-color: #b3261e !important; font-weight: 600 !important; }
+    .gp-hint { font-size: 0.74rem; color: var(--muted); }
+
+    /* --- The reveal ------------------------------------------------------- */
+    body.gv-open { overflow: hidden; }
+    .gv-wrap {
+      position: fixed; inset: 0; z-index: 999;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(28, 24, 20, 0.72);
+      animation: gvFade 0.35s ease both;
+      padding: 20px;
+    }
+    @keyframes gvFade { from { opacity: 0; } to { opacity: 1; } }
+
+    .gv-stage { position: relative; width: 300px; max-width: 100%; }
+
+    /* The envelope is a stack: back, card, front, flap. The card slides UP from
+       between the back and the front, which is what makes it look posted. */
+    .gv-env { position: relative; height: 200px; perspective: 900px; }
+    .gv-back, .gv-front, .gv-flap {
+      position: absolute; left: 0; right: 0;
+    }
+    .gv-back {
+      top: 0; height: 200px; border-radius: 10px;
+      background: linear-gradient(170deg, #e8d7c3, #d9c3a8);
+      z-index: 1;
+    }
+    .gv-front {
+      bottom: 0; height: 118px; border-radius: 0 0 10px 10px;
+      background: linear-gradient(170deg, #f0e2d1, #e2cdb4);
+      box-shadow: 0 -1px 0 rgba(0,0,0,0.06);
+      z-index: 3;
+    }
+    .gv-flap {
+      top: 0; height: 96px;
+      background: linear-gradient(170deg, #f3e7d8, #e6d2bb);
+      clip-path: polygon(0 0, 100% 0, 50% 100%);
+      transform-origin: top center; transform: rotateX(0deg);
+      z-index: 4;
+      animation: gvFlap 0.7s cubic-bezier(.55,.06,.33,1) 1.25s both;
+    }
+    @keyframes gvFlap {
+      to { transform: rotateX(-174deg); }
+    }
+
+    .gv-card {
+      position: absolute; left: 10px; right: 10px; top: 14px;
+      z-index: 2; border-radius: 9px; padding: 18px 16px; text-align: center;
+      background: #fffdf8; border: 1px solid #ece2d2;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.26);
+      transform: translateY(26px) scale(0.96); opacity: 0;
+      animation: gvCard 0.85s cubic-bezier(.2,.9,.3,1) 1.95s both;
+    }
+    /* Rises clear of the envelope and lands above it, so the text is never cropped. */
+    @keyframes gvCard {
+      0%   { transform: translateY(26px) scale(0.96); opacity: 0; }
+      35%  { opacity: 1; }
+      100% { transform: translateY(-104px) scale(1); opacity: 1; z-index: 6; }
+    }
+    .gv-card { animation-fill-mode: both; }
+    .gv-from { font-size: 0.74rem; font-weight: 700; letter-spacing: 0.05em;
+      text-transform: uppercase; color: #a08b6a; }
+    .gv-msg { margin-top: 10px; font-size: 0.95rem; line-height: 1.55; color: #3f3a31;
+      font-style: italic; white-space: pre-wrap; }
+    .gv-amt { margin-top: 14px; font-size: 2.1rem; font-weight: 700; color: #8a5a00;
+      font-variant-numeric: tabular-nums; }
+    .gv-sub { font-size: 0.76rem; color: #a08b6a; margin-top: 1px; }
+
+    /* Ribbon and bow, which come off first. */
+    .gv-ribbon { position: absolute; background: linear-gradient(90deg, #c2415a, #a8324a);
+      z-index: 5; animation: gvRibbon 0.6s ease 0.55s both; }
+    .gv-ribbon.v { top: 0; bottom: 0; left: 50%; width: 26px; margin-left: -13px;
+      background: linear-gradient(180deg, #c2415a, #a8324a); }
+    .gv-ribbon.h { left: 0; right: 0; top: 50%; height: 26px; margin-top: -13px; }
+    @keyframes gvRibbon { to { transform: scale(0.1); opacity: 0; } }
+    .gv-ribbon.v { transform-origin: center top; }
+    .gv-ribbon.h { transform-origin: left center; }
+
+    .gv-bow { position: absolute; left: 50%; top: 50%; width: 0; height: 0; z-index: 6;
+      animation: gvBow 0.65s cubic-bezier(.5,-0.4,.6,1) 0.3s both; }
+    @keyframes gvBow {
+      40% { transform: translateY(-10px) rotate(-12deg) scale(1.08); }
+      100% { transform: translateY(-150px) rotate(-40deg) scale(0.3); opacity: 0; }
+    }
+    .gv-bow i { position: absolute; display: block; background: #d2516a; }
+    .gv-bow .l, .gv-bow .r {
+      width: 40px; height: 30px; top: -15px; border-radius: 50% 50% 50% 50%;
+      box-shadow: inset 0 -3px 6px rgba(0,0,0,0.12);
+    }
+    .gv-bow .l { left: -42px; transform: rotate(-16deg); }
+    .gv-bow .r { left: 2px; transform: rotate(16deg); }
+    .gv-bow .k { width: 16px; height: 16px; left: -8px; top: -8px; border-radius: 50%;
+      background: #b53f57; }
+
+    .gv-close {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      bottom: -58px; padding: 9px 20px; min-height: 42px;
+      border: 1px solid rgba(255,255,255,0.35); border-radius: 999px;
+      background: rgba(255,255,255,0.12); color: #fff;
+      font: inherit; font-size: 0.84rem; font-weight: 600; cursor: pointer;
+      animation: gvFade 0.4s ease 0.8s both;
+    }
+    .gv-close:hover { background: rgba(255,255,255,0.22); }
+
+    /* Asked for less movement: the card is simply there. The message still arrives,
+       which was always the point. */
+    .gv-wrap.calm .gv-flap, .gv-wrap.calm .gv-ribbon, .gv-wrap.calm .gv-bow { display: none; }
+    .gv-wrap.calm .gv-env { height: auto; }
+    .gv-wrap.calm .gv-back, .gv-wrap.calm .gv-front { display: none; }
+    .gv-wrap.calm .gv-card {
+      position: static; animation: none; opacity: 1; transform: none;
+    }
+    .gv-wrap.calm .gv-close { position: static; transform: none; margin: 18px auto 0; display: block; }
+
+    @media (max-width: 520px) {
+      .gp-fields { grid-template-columns: 1fr; }
+      .gv-stage { width: 270px; }
+    }
+
     /* --- The itinerary on the calendar ------------------------------------ */
     /* Blue, deliberately: tasks own red and amber, which mean "do something".
        A stay is not urgent, it is just when you are there. */
@@ -691,6 +856,6 @@
   <script src="config.js?v=3"></script>
   <script src="backend.js?v=2"></script>
   <script src="booking.js?v=6"></script>
-  <script src="group.js?v=21"></script>
+  <script src="group.js?v=22"></script>
 </body>
 </html>

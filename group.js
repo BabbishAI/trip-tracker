@@ -685,6 +685,9 @@ function render() {
     if (sched) root.appendChild(sched);
 
   } else {
+    const giftPanel = buildGiftPanel();
+    if (giftPanel) root.appendChild(giftPanel);
+
     const you = buildYouPanel();
     if (you) root.appendChild(you);
     const ledger = buildLedgerPanel();
@@ -837,6 +840,8 @@ function startPlan() {
   if (!plan || !Array.isArray(plan.items)) { renderEmpty(); return; }
   if (!Array.isArray(plan.tasks)) plan.tasks = [];
   noteVisit();
+  // After render, so the card opens over a page rather than a blank screen.
+  setTimeout(function () { playGiftReveal(false); }, 350);
   for (const it of plan.items) {
     it.date = it.date || "";
     it.endDate = it.endDate || "";
@@ -907,6 +912,7 @@ function currentPayload() {
     groupOff: plan.groupOff,
     payments: plan.payments,
     tasks: plan.tasks,
+    gift: plan.gift,
   };
 }
 
@@ -918,6 +924,7 @@ function currentPayload() {
 let dirtyItems = new Set();   // item ids touched here (including ones deleted here)
 let dirtyPayments = new Set();  // payment ids touched here (including ones deleted here)
 let dirtyTasks = new Set();     // schedule task ids touched here (including ones deleted here)
+let dirtyGift = false;          // the contribution card: submitted, edited or withdrawn here
 let dirtyStructure = false;   // title, roster, split basis, choice-group selections
 
 function markItem(id) {
@@ -982,6 +989,10 @@ function mergeInto(stored) {
     }
   }
 
+  // Whole-value, not per-record: there is one gift. Withdrawing it has to survive the
+  // merge as deliberately as submitting it, so a null is written rather than skipped.
+  if (dirtyGift) base.gift = plan.gift ? JSON.parse(JSON.stringify(plan.gift)) : null;
+
   if (dirtyStructure) {
     base.title = plan.title;
     base.households = plan.households;
@@ -1036,6 +1047,7 @@ async function cloudSave() {
   dirtyItems = new Set();
   dirtyPayments = new Set();
   dirtyTasks = new Set();
+  dirtyGift = false;
   dirtyStructure = false;
   return hadOthers;
 }
@@ -2821,4 +2833,253 @@ function buildTaskCalendar() {
   }
 
   return wrap;
+}
+
+// --- A contribution, announced properly -------------------------------------
+//
+// There has long been a calculator here that lets a contributing household model
+// "what if I put in X" — deliberately private, never written to the shared plan,
+// because exploring an offer should not broadcast a half-formed number to thirteen
+// people. What was missing was the other end: actually saying it, once decided.
+//
+// So this is two things. A pledge the contributing household submits — an amount and
+// a message in their own words — and the way everyone else finds out, which is a
+// wrapped envelope that unties itself and opens into a card.
+//
+// WHAT IT DOES NOT DO: move anybody's share. The ledger follows money that has
+// actually been laid out, tracked through payers and repayments. A pledge that
+// quietly reduced what families owe would double-count the moment the money really
+// changed hands, and the settle-up would stop agreeing with reality. The card says
+// what was promised; the Money tab keeps saying what is owed.
+
+function planGift() {
+  const g = plan.gift;
+  return g && typeof g === "object" && Number(g.amount) > 0 ? g : null;
+}
+
+// Keyed on the submission time, so editing the amount or the message makes it a new
+// gift and it plays again for everyone. Per device, like every other viewer setting.
+function giftSeenKey() {
+  const g = planGift();
+  return "tt-gift-" + (planId || "hash") + "-" + (g ? g.at || "" : "");
+}
+function giftSeen() {
+  try { return !!localStorage.getItem(giftSeenKey()); } catch (e) { return true; }
+}
+function markGiftSeen() {
+  try { localStorage.setItem(giftSeenKey(), "1"); } catch (e) {}
+}
+
+// Only the household flagged as contributing, and only on the device where someone
+// has claimed it. Gated on the flag rather than a name so it survives a rename.
+function canPledge() {
+  if (!canEdit()) return false;
+  const me = getMe();
+  const h = (plan.households || []).find(function (x) { return x.id === me; });
+  return !!(h && h.contributes);
+}
+
+function giverName(g) {
+  const h = (plan.households || []).find(function (x) { return x.id === (g || {}).from; });
+  return h ? h.name : "";
+}
+
+function saveGiftSoon() {
+  if (!canEdit()) return;
+  dirtyGift = true;
+  setSaveState("Saving…", "pending");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async function () {
+    try {
+      await cloudSave();
+      setSaveState("Saved for everyone", "ok");
+      render();
+    } catch (e) {
+      setSaveState("NOT SAVED — " + e.message + ". Your change is still on screen; try again.", "bad");
+    }
+  }, 700);
+}
+
+// --- The panel on the Money tab ---------------------------------------------
+
+function buildGiftPanel() {
+  const g = planGift();
+  const mine = canPledge();
+  if (!g && !mine) return null;
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+
+  if (g) {
+    const who = giverName(g);
+    panel.innerHTML =
+      '<div class="area-heading">A gift toward the trip</div>' +
+      '<div class="gp-card">' +
+      '<div class="gp-amt">' + fmtUSD(Math.round(Number(g.amount))) + "</div>" +
+      (who ? '<div class="gp-from">from the ' + escapeHTML(who) + "</div>" : "") +
+      (g.message ? '<div class="gp-msg">' + escapeHTML(g.message) + "</div>" : "") +
+      "</div>";
+
+    const again = document.createElement("button");
+    again.type = "button";
+    again.className = "gp-replay";
+    again.textContent = "Play the card again";
+    again.addEventListener("click", function () { playGiftReveal(true); });
+    panel.appendChild(again);
+
+    const note = document.createElement("div");
+    note.className = "gp-note";
+    note.textContent =
+      "This is the promise, not the bookkeeping. Everyone's share below still shows " +
+      "what is owed until the money actually moves — record it as a payment, or set " +
+      "them as the payer on what they cover, and the settle-up will follow.";
+    panel.appendChild(note);
+  }
+
+  if (mine) panel.appendChild(buildPledgeForm(g));
+  return panel;
+}
+
+function buildPledgeForm(g) {
+  const wrap = document.createElement("details");
+  wrap.className = "gp-form";
+  const sum = document.createElement("summary");
+  sum.textContent = g ? "Change your gift" : "Give a gift toward the trip";
+  wrap.appendChild(sum);
+
+  const form = document.createElement("form");
+  form.className = "gp-fields";
+  form.innerHTML =
+    '<label><span>Amount</span><input name="amount" type="number" step="1" min="1" ' +
+    'placeholder="e.g. 5000" value="' + (g ? escapeHTML(String(g.amount)) : "") + '" required></label>' +
+    '<label class="wide"><span>Your message</span><textarea name="message" rows="3" ' +
+    'placeholder="Say something to the family — this is what the card will read.">' +
+    (g ? escapeHTML(g.message || "") : "") + "</textarea></label>" +
+    '<div class="gp-actions"><button type="submit">' +
+    (g ? "Update the card" : "Wrap it up") + "</button>" +
+    (g ? '<button type="button" class="gp-remove">Take it back</button>' : "") +
+    '<span class="gp-hint">Everyone sees this, with your message, the next time they open the site.</span></div>';
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    const amount = Number(form.amount.value);
+    if (!(amount > 0)) return;
+    plan.gift = {
+      from: getMe(),
+      amount: amount,
+      message: form.message.value.trim(),
+      // Doubles as the version: change either field and the card plays again.
+      at: new Date().toISOString(),
+    };
+    saveGiftSoon();
+    render();
+    playGiftReveal(true);
+  });
+
+  const remove = form.querySelector(".gp-remove");
+  if (remove) {
+    let armed = false, timer = null;
+    remove.addEventListener("click", function () {
+      if (!armed) {
+        armed = true;
+        remove.textContent = "Tap again to remove it";
+        remove.classList.add("armed");
+        timer = setTimeout(function () {
+          armed = false;
+          remove.textContent = "Take it back";
+          remove.classList.remove("armed");
+        }, 8000);
+        return;
+      }
+      clearTimeout(timer);
+      plan.gift = null;
+      saveGiftSoon();
+      render();
+    });
+  }
+
+  wrap.appendChild(form);
+  return wrap;
+}
+
+// --- The reveal -------------------------------------------------------------
+
+function playGiftReveal(force) {
+  const g = planGift();
+  if (!g) return;
+  if (!force && giftSeen()) return;
+  if (document.querySelector(".gv-wrap")) return;   // already on screen
+
+  markGiftSeen();
+
+  // Someone who has asked their system for less movement gets the card, not the
+  // performance. The point is the message, and that still arrives.
+  let calm = false;
+  try {
+    calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch (e) { calm = false; }
+
+  const who = giverName(g);
+  const amount = Math.round(Number(g.amount));
+
+  const wrap = document.createElement("div");
+  wrap.className = "gv-wrap" + (calm ? " calm" : "");
+  wrap.setAttribute("role", "dialog");
+  wrap.setAttribute("aria-label", "A gift toward the trip");
+  wrap.innerHTML =
+    '<div class="gv-stage">' +
+      '<div class="gv-env">' +
+        '<div class="gv-back"></div>' +
+        '<div class="gv-card">' +
+          (who ? '<div class="gv-from">A gift from the ' + escapeHTML(who) + "</div>" : "") +
+          (g.message ? '<div class="gv-msg">' + escapeHTML(g.message) + "</div>" : "") +
+          '<div class="gv-amt" data-to="' + amount + '">' + (calm ? fmtUSD(amount) : "$0") + "</div>" +
+          '<div class="gv-sub">toward the trip</div>' +
+        "</div>" +
+        '<div class="gv-front"></div>' +
+        '<div class="gv-flap"></div>' +
+        '<div class="gv-ribbon v"></div>' +
+        '<div class="gv-ribbon h"></div>' +
+        '<div class="gv-bow"><i class="l"></i><i class="r"></i><i class="k"></i></div>' +
+      "</div>" +
+      '<button type="button" class="gv-close">Close</button>' +
+    "</div>";
+
+  document.body.appendChild(wrap);
+  document.body.classList.add("gv-open");
+
+  const close = function () {
+    document.body.classList.remove("gv-open");
+    wrap.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = function (e) { if (e.key === "Escape") close(); };
+
+  wrap.addEventListener("click", function (e) {
+    // Anywhere outside the card closes it — including mid-animation, so nobody is
+    // held hostage by a bow they have already seen.
+    if (!e.target.closest(".gv-card")) close();
+  });
+  document.addEventListener("keydown", onKey);
+  wrap.querySelector(".gv-close").focus();
+
+  if (!calm) countUp(wrap.querySelector(".gv-amt"), amount, 2200, 900);
+}
+
+// Ticks the figure up once the card is out. Pure decoration, and skipped entirely
+// when the viewer has asked for reduced motion.
+function countUp(el, to, delayMs, durMs) {
+  if (!el) return;
+  setTimeout(function () {
+    const started = performance.now();
+    const step = function (now) {
+      const t = Math.min(1, (now - started) / durMs);
+      // Ease out, so it lands softly rather than stopping dead.
+      const eased = 1 - Math.pow(1 - t, 3);
+      el.textContent = fmtUSD(Math.round(to * eased));
+      if (t < 1 && document.body.contains(el)) requestAnimationFrame(step);
+      else el.textContent = fmtUSD(to);
+    };
+    requestAnimationFrame(step);
+  }, delayMs);
 }
