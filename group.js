@@ -103,6 +103,42 @@ function initSelections() {
 }
 
 // --- Totals ---------------------------------------------------------------
+
+// The gift, expressed as a line on the bill.
+//
+// It is NOT a payment. A payment moves money between two families and changes who
+// owes whom; it never changes what the holiday costs. A gift is money arriving from
+// outside the shared pot, so the trip genuinely costs less and every family's share
+// of it falls. Modelling it as a negative "total" item means the existing split
+// rules do the work: a total is apportioned by the trip's share basis, so the credit
+// comes off each household in the same proportion their share went on.
+//
+// Built on the fly and never stored in plan.items, so it cannot be edited, deleted
+// or dragged about like a booking — the gift form is the only way to change it.
+//
+// payer is left empty deliberately. Setting a payer would add the negative to that
+// household's "paid" column and push it through the settle-up, which is exactly the
+// "treat it as a payment" behaviour this is meant to avoid. No money has moved
+// between families, so nobody's transfer changes.
+function giftCreditItem() {
+  const g = planGift();
+  if (!g) return null;
+  const who = giverName(g);
+  return {
+    id: "__gift_credit",
+    title: who ? "Gift from the " + who : "Gift toward the trip",
+    cost: -Math.abs(Number(g.amount)),
+    actual: null,
+    priceMode: "total",
+    shares: [],
+    included: true,
+    status: "credit",
+    payer: "",
+    conf: "", vendor: "", notes: g.message || "", url: "",
+    date: "", endDate: "", group: "", optional: false,
+    isCredit: true,
+  };
+}
 function costOf(id) {
   const it = plan.items.find((x) => x.id === id);
   return it ? Booking.effCost(plan, it) : 0;
@@ -116,7 +152,16 @@ function computeTotal() {
   for (const name of groupNames()) {
     if (vSel[name]) total += costOf(vSel[name]);
   }
+  const credit = giftCreditItem();
+  if (credit) total += Booking.effCost(plan, credit);   // negative, so it comes off
   return total;
+}
+
+// What the trip costs before the gift is taken off — needed so the Trip tab can show
+// the credit doing something rather than just quoting a smaller number.
+function computeTotalBeforeGift() {
+  const credit = giftCreditItem();
+  return computeTotal() - (credit ? Booking.effCost(plan, credit) : 0);
 }
 
 // --- Rendering ------------------------------------------------------------
@@ -449,6 +494,11 @@ function countedItems() {
     if (it.group) { if (vSel[it.group] === it.id) out.push(it); }
     else if (isIncluded(it)) out.push(it);
   }
+  // Last, so it reads as a credit applied at the bottom of the bill. Every panel that
+  // works out what a family owes goes through here, which is why one line here is
+  // enough to make the gift show up in all of them.
+  const credit = giftCreditItem();
+  if (credit) out.push(credit);
   return out;
 }
 
@@ -608,6 +658,20 @@ function buildLedgerPanel() {
     }
     html += "</ul>";
   }
+  // Without this, the two halves of the panel look like they contradict each other:
+  // a family's share of the trip has dropped because of the gift, while the transfer
+  // below has not moved an inch. Both are right, for different reasons, and the only
+  // way to know that is to be told.
+  const giftNow = planGift();
+  if (giftNow) {
+    html += '<div class="you-note">The ' + escapeHTML(giverName(giftNow) || "gift") +
+      '’s gift of <strong>' + fmtUSD(Math.round(Number(giftNow.amount))) +
+      "</strong> is already taken off every share above. It does not change the " +
+      "settling-up below, because that is about money people have actually laid out " +
+      "— and no gift money has changed hands yet. When it does, record it as a " +
+      "payment or set them as the payer on what it covers.</div>";
+  }
+
   if (owedToVendors >= 1) {
     html += `<div class="you-note"><strong>${fmtUSD(Math.round(owedToVendors))}</strong> of the trip hasn\u2019t been paid by anyone yet, so it isn\u2019t in the settling-up above \u2014 that money is still owed to airlines, hosts and parks.</div>`;
   }
@@ -664,6 +728,11 @@ function render() {
       if (bar) listPanel.appendChild(bar);
       listPanel.appendChild(buildTimeline());
     }
+    // The credit sits under the bookings rather than among them: it is not something
+    // the group booked, it is something taken off the bottom of what they booked.
+    const creditRow = buildCreditRow();
+    if (creditRow) listPanel.appendChild(creditRow);
+
     if (canEdit()) listPanel.appendChild(buildAddForm());
     root.appendChild(listPanel);
 
@@ -671,7 +740,21 @@ function render() {
     totalPanel.className = "panel total-panel";
     let note = "";
     if (totalGroups > 0) note = `${chosenGroups} of ${totalGroups} choice group${totalGroups === 1 ? "" : "s"} selected`;
+
+    const credit = giftCreditItem();
+    let totalHtml = "";
+    if (credit) {
+      // Showing only the smaller number would hide the gift doing its work. The
+      // subtraction is the point.
+      const before = computeTotalBeforeGift();
+      totalHtml =
+        `<div class="total-row sub"><span class="label">Bookings and plans</span>` +
+        `<span class="val">${fmtUSD(before)}</span></div>` +
+        `<div class="total-row sub credit"><span class="label">${escapeHTML(credit.title)}</span>` +
+        `<span class="val">−${fmtUSD(Math.abs(credit.cost))}</span></div>`;
+    }
     totalPanel.innerHTML =
+      totalHtml +
       `<div class="total-row grand"><span class="label">Estimated trip total</span>` +
       `<span class="val">${fmtUSD(total)}</span></div>` +
       (note ? `<div class="total-note">${note}</div>` : "");
@@ -840,8 +923,9 @@ function startPlan() {
   if (!plan || !Array.isArray(plan.items)) { renderEmpty(); return; }
   if (!Array.isArray(plan.tasks)) plan.tasks = [];
   noteVisit();
-  // After render, so the card opens over a page rather than a blank screen.
-  setTimeout(function () { playGiftReveal(false); }, 350);
+  // Every time anyone opens the site, by request — not once per device. It is still
+  // dismissable on the first click, so it costs a tap rather than a wait.
+  setTimeout(function () { playGiftReveal(true); }, 350);
   for (const it of plan.items) {
     it.date = it.date || "";
     it.endDate = it.endDate || "";
@@ -2929,10 +3013,14 @@ function buildGiftPanel() {
 
     const note = document.createElement("div");
     note.className = "gp-note";
-    note.textContent =
-      "This is the promise, not the bookkeeping. Everyone's share below still shows " +
-      "what is owed until the money actually moves — record it as a payment, or set " +
-      "them as the payer on what they cover, and the settle-up will follow.";
+    note.innerHTML =
+      "This comes off the trip before anyone's share is worked out, so it shows as a " +
+      "credit on the Trip tab and every family below owes less. It is <strong>not</strong> " +
+      "treated as a payment between families, so nobody's settling-up transfer changes." +
+      "<br><br>Because it comes off the whole trip, the " +
+      escapeHTML(giverName(planGift()) || "giving household") +
+      "’s own share falls a little too. If the intention is to cover only the " +
+      "other families' shares, say so and it can work that way instead.";
     panel.appendChild(note);
   }
 
@@ -3082,4 +3170,23 @@ function countUp(el, to, delayMs, durMs) {
     };
     requestAnimationFrame(step);
   }, delayMs);
+}
+
+// The credit as it appears under the itinerary: a row, not a booking. No Edit, no
+// Remove, no checkbox — it is changed through the gift form or not at all.
+function buildCreditRow() {
+  const credit = giftCreditItem();
+  if (!credit) return null;
+  const g = planGift();
+
+  const row = document.createElement("div");
+  row.className = "credit-row";
+  row.innerHTML =
+    '<div class="cr-main">' +
+      '<div class="cr-title">' + escapeHTML(credit.title) + "</div>" +
+      '<div class="cr-sub">A gift toward the trip — taken off before everyone’s share is worked out</div>' +
+      (g && g.message ? '<div class="cr-msg">' + escapeHTML(g.message) + "</div>" : "") +
+    "</div>" +
+    '<div class="cr-amt">−' + fmtUSD(Math.abs(credit.cost)) + "</div>";
+  return row;
 }

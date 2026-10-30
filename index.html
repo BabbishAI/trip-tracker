@@ -558,6 +558,23 @@
 
 
 
+
+    /* --- The gift as a credit on the bill --------------------------------- */
+    .credit-row {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
+      margin-top: 10px; padding: 12px 14px;
+      border: 1px dashed #c9b79c; border-radius: 10px; background: #fdf8f0;
+    }
+    .cr-title { font-size: 0.94rem; font-weight: 700; color: #7a5200; }
+    .cr-sub { font-size: 0.76rem; color: #96866c; margin-top: 2px; }
+    .cr-msg { font-size: 0.8rem; color: #6b5e49; margin-top: 6px; font-style: italic;
+      white-space: pre-wrap; }
+    .cr-amt { font-size: 1.05rem; font-weight: 700; color: #1a7a4a;
+      font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .total-row.sub { font-size: 0.86rem; color: var(--muted); padding: 2px 0; }
+    .total-row.sub .val { font-variant-numeric: tabular-nums; }
+    .total-row.sub.credit .label, .total-row.sub.credit .val { color: #1a7a4a; font-weight: 600; }
+
     /* --- The gift panel on the Money tab ---------------------------------- */
     .gp-card {
       border-radius: 12px; padding: 18px 20px; text-align: center;
@@ -856,6 +873,6 @@
   <script src="config.js?v=3"></script>
   <script src="backend.js?v=2"></script>
   <script src="booking.js?v=6"></script>
-  <script src="group.js?v=22"></script>
+  <script src="group.js?v=23"></script>
 </body>
 </html>
