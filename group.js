@@ -126,7 +126,7 @@ function giftCreditItem() {
   const who = giverName(g);
   return {
     id: "__gift_credit",
-    title: who ? "Gift from the " + who : "Gift toward the trip",
+    title: who ? "Gift from " + houseLabel(who) : "Gift toward the trip",
     cost: -Math.abs(Number(g.amount)),
     actual: null,
     priceMode: "total",
@@ -604,7 +604,7 @@ function buildYouPanel() {
       : "") +
     `<div class="total-row"><span class="label">Your share of the trip</span><span class="val">${fmtUSD(Math.round(mine.owes))}</span></div>` +
     (giftHere && myCredit >= 0.5
-      ? `<div class="total-row gift-line"><span class="label">${escapeHTML(giftHere.from === me ? "Your gift, against your own share" : "Gift from the " + (giverName(giftHere) || "family"))}</span>` +
+      ? `<div class="total-row gift-line"><span class="label">${escapeHTML(giftHere.from === me ? "Your gift, against your own share" : "Gift from " + (houseLabel(giverName(giftHere)) || "the family"))}</span>` +
         `<span class="val">−${fmtUSD(Math.round(myCredit))}</span></div>` +
         `<div class="total-row after-line"><span class="label">Your share after the gift</span>` +
         `<span class="val">${fmtUSD(Math.round(myAfter))}</span></div>`
@@ -630,7 +630,7 @@ function buildYouPanel() {
     // The breakdown has to end where the summary above ends, or it stops being a
     // breakdown of anything.
     if (giftHere && myCredit >= 0.5) {
-      html += `<tr class="gift-line"><td>${escapeHTML(giftHere.from === me ? "Your gift, against your own share" : "Gift from the " + (giverName(giftHere) || "family"))}</td>` +
+      html += `<tr class="gift-line"><td>${escapeHTML(giftHere.from === me ? "Your gift, against your own share" : "Gift from " + (houseLabel(giverName(giftHere)) || "the family"))}</td>` +
         `<td class="amt">−${fmtUSD(Math.round(myCredit))}</td></tr>`;
       html += `<tr class="after-line"><td>Your share after the gift</td>` +
         `<td class="amt">${fmtUSD(Math.round(myAfter))}</td></tr>`;
@@ -702,8 +702,9 @@ function buildLedgerPanel() {
 
   if (giftOn) {
     const giver = giverName(planGift());
-    html += '<div class="you-note">The gift covers the ' + escapeHTML(giver || "giving household") +
-      "\u2019s own share first, and what is left is divided evenly between the other " +
+    html += '<div class="you-note">The gift covers ' +
+      escapeHTML(housePossessive(giver) || "the giving household\u2019s") +
+      " own share first, and what is left is divided evenly between the other " +
       (rows.length - 1) + " families." +
       (alloc.unused > 0.5
         ? " <strong>" + fmtUSD(Math.round(alloc.unused)) +
@@ -3027,6 +3028,24 @@ function canPledge() {
   return !!(h && h.contributes);
 }
 
+// Household names are sometimes a family surname that wants a definite article
+// ("the Rogalins") and sometimes what the grandchildren call them ("Nana & Papa").
+// "A gift from the Nana & Papa" is not English, so the article is earned rather than
+// assumed. Trailing-s is a rough test, but it is right for every name on this trip
+// and it fails gently: at worst an article is missing, never nonsense.
+function houseLabel(name) {
+  const n = (name || "").trim();
+  if (!n) return "";
+  return /s$/i.test(n) ? "the " + n : n;
+}
+
+// The same name in possessive form: "the Rogalins' share", "Nana & Papa's share".
+function housePossessive(name) {
+  const n = (name || "").trim();
+  if (!n) return "";
+  return /s$/i.test(n) ? "the " + n + "’" : n + "’s";
+}
+
 function giverName(g) {
   const h = (plan.households || []).find(function (x) { return x.id === (g || {}).from; });
   return h ? h.name : "";
@@ -3064,7 +3083,7 @@ function buildGiftPanel() {
       '<div class="area-heading">A gift toward the trip</div>' +
       '<div class="gp-card">' +
       '<div class="gp-amt">' + fmtUSD(Math.round(Number(g.amount))) + "</div>" +
-      (who ? '<div class="gp-from">from the ' + escapeHTML(who) + "</div>" : "") +
+      (who ? '<div class="gp-from">from ' + escapeHTML(houseLabel(who)) + "</div>" : "") +
       (g.message ? '<div class="gp-msg">' + escapeHTML(g.message) + "</div>" : "") +
       "</div>";
 
@@ -3081,10 +3100,8 @@ function buildGiftPanel() {
       "This comes off the trip before anyone's share is worked out, so it shows as a " +
       "credit on the Trip tab and every family below owes less. It is <strong>not</strong> " +
       "treated as a payment between families, so nobody's settling-up transfer changes." +
-      "<br><br>Because it comes off the whole trip, the " +
-      escapeHTML(giverName(planGift()) || "giving household") +
-      "’s own share falls a little too. If the intention is to cover only the " +
-      "other families' shares, say so and it can work that way instead.";
+      "<br><br>It covers " + escapeHTML(housePossessive(giverName(planGift())) || "the giving household’s") +
+      " own share first, and what is left is divided evenly between the other families.";
     panel.appendChild(note);
   }
 
@@ -3183,7 +3200,7 @@ function playGiftReveal(force) {
       '<div class="gv-env">' +
         '<div class="gv-back"></div>' +
         '<div class="gv-card">' +
-          (who ? '<div class="gv-from">A gift from the ' + escapeHTML(who) + "</div>" : "") +
+          (who ? '<div class="gv-from">A gift from ' + escapeHTML(houseLabel(who)) + "</div>" : "") +
           (g.message ? '<div class="gv-msg">' + escapeHTML(g.message) + "</div>" : "") +
           '<div class="gv-amt" data-to="' + amount + '">' + (calm ? fmtUSD(amount) : "$0") + "</div>" +
           '<div class="gv-sub">toward the trip</div>' +
