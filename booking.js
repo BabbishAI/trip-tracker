@@ -321,7 +321,14 @@ window.Booking = (function () {
       if (c.net <= EPS) ci++;
       if (d.net >= -EPS) di++;
     }
-    return transfers;
+
+    // Round sums almost never match a split exactly. Paying a round $2,601 against a
+    // share of $2,600.74 leaves 26p of credit, and the algorithm dutifully proposes a
+    // transfer to settle it — which the page then rounds and displays as "pays $0".
+    // Nobody is going to hand over 26p, and an instruction to move nothing is worse
+    // than no instruction. Anything that would not show as at least a pound is
+    // dropped; the pennies stay where they are.
+    return transfers.filter(function (t) { return t.amount >= 0.5; });
   }
 
   // Trip-level estimate-vs-reality rollup for the summary bar.
