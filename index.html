@@ -563,6 +563,33 @@
 
     .you-body .you-sub { font-size: 0.78rem; color: var(--muted); line-height: 1.5;
       margin: -4px 0 10px; }
+
+    /* --- One family's itemised bill --------------------------------------- */
+    .v-items { width: 100%; border-collapse: collapse; font-size: 0.86rem; min-width: 460px; }
+    .v-items th {
+      text-align: left; font-size: 0.68rem; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--muted); font-weight: 700;
+      padding: 0 10px 6px 0; border-bottom: 1px solid var(--border);
+    }
+    .v-items th.n, .v-items td.n { text-align: right; padding-right: 0; }
+    .v-items th.n { padding-right: 0; }
+    .v-items td { padding: 9px 10px 9px 0; border-bottom: 1px solid #f0f2f6;
+      vertical-align: top; font-variant-numeric: tabular-nums; }
+    .v-items td:first-child { font-variant-numeric: normal; }
+    .v-items .muted { color: #b6bcc4; }
+    .v-items .pos { color: #1a7a4a; font-weight: 600; }
+    .v-items .neg { color: #b3261e; font-weight: 600; }
+    /* Who it is due to, under the figure: the amount matters first, the recipient
+       second, and putting them on one line made the column too wide to fit. */
+    .v-items .due-to { display: block; font-size: 0.68rem; color: var(--muted);
+      font-weight: 400; margin-top: 1px; }
+    .v-items .li-est { display: block; font-size: 0.66rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.04em; margin-top: 2px; }
+    .v-items tr.li-total td { border-top: 2px solid var(--border); border-bottom: none;
+      font-weight: 700; padding-top: 10px; }
+    .v-items tr.gift-line td { color: #1a7a4a; font-weight: 600; border-bottom: none; }
+    .v-items tr.li-after td { font-weight: 700; border-top: 1px solid var(--border); }
+
     /* The gift inside "Your share": green for what comes off, and the line beneath
        it ruled and bold, because it is the figure that actually matters to you. */
     .you-body .total-row.gift-line .label,
@@ -904,6 +931,6 @@
   <script src="config.js?v=3"></script>
   <script src="backend.js?v=2"></script>
   <script src="booking.js?v=6"></script>
-  <script src="group.js?v=26"></script>
+  <script src="group.js?v=27"></script>
 </body>
 </html>

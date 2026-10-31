@@ -618,30 +618,10 @@ function buildYouPanel() {
   }
   panel.appendChild(body);
 
-  // Line-by-line, so the number above is never a black box.
-  const lines = counted
-    .map((it) => ({ it, amt: Booking.splitItem(plan, it)[me] || 0 }))
-    .filter((r) => r.amt >= 0.5);
-  if (lines.length) {
-    let html = '<table class="you-lines"><tbody>';
-    for (const r of lines) {
-      html += `<tr><td>${escapeHTML(r.it.title)}</td><td class="amt">${fmtUSD(Math.round(r.amt))}</td></tr>`;
-    }
-    // The breakdown has to end where the summary above ends, or it stops being a
-    // breakdown of anything.
-    if (giftHere && myCredit >= 0.5) {
-      html += `<tr class="gift-line"><td>${escapeHTML(giftHere.from === me ? "Your gift, against your own share" : "Gift from " + (houseLabel(giverName(giftHere)) || "the family"))}</td>` +
-        `<td class="amt">−${fmtUSD(Math.round(myCredit))}</td></tr>`;
-      html += `<tr class="after-line"><td>Your share after the gift</td>` +
-        `<td class="amt">${fmtUSD(Math.round(myAfter))}</td></tr>`;
-    }
-    html += "</tbody></table>";
-    const det = document.createElement("details");
-    det.className = "you-detail";
-    det.innerHTML = "<summary>How your share breaks down</summary>" + html;
-    panel.appendChild(det);
-  }
-
+  // The old collapsed "how your share breaks down" list lived here. It has been
+  // dropped rather than kept alongside the itemised panel below, which lists the same
+  // items with three columns instead of one. Two breakdowns of the same number, a few
+  // inches apart, is how a page stops being believed.
   if (isContributor(me)) {
     const gift = buildGiftSection(me);
     if (gift) panel.appendChild(gift);
@@ -657,93 +637,157 @@ function buildYouPanel() {
   return panel;
 }
 
-// The whole group's books, so nobody has to take the organiser's word for it.
+/**
+ * One family's bill, line by line.
+ *
+ * This used to be a four-row table of every household's totals, which answered
+ * "what does everyone owe" and not "what do I owe, and why". The itinerary already
+ * lists what the trip consists of; this lists the same things again at the only
+ * level that matters to the person reading — their own allocation of each one.
+ *
+ * Three money columns, because a share and a debt are not the same thing:
+ *   Your share  what this item costs this household, by whatever rule splits it
+ *   Owe / owed  who it is between, once somebody has actually laid money out
+ *   Still due   what this household has yet to hand over for it, and to whom
+ *
+ * An item nobody has paid for yet is owed to the vendor, not to a family, so it has
+ * a Due and no Owe. An item this household paid for is owed TO them, so it has an
+ * Owed and no Due. An estimate is neither until it is booked.
+ */
 function buildLedgerPanel() {
   const houses = Booking.households(plan);
   if (houses.length === 0) return null;
+
   const counted = countedItems();
   const rows = Booking.ledger(plan, counted);
-  const owedToVendors = Booking.unfunded(plan, counted);
   const me = getMe();
 
   const panel = document.createElement("div");
   panel.className = "panel";
-  // The gift gets columns of its own rather than being folded silently into the
-  // share. Three figures that visibly subtract are worth more than one number nobody
-  // can derive.
+
+  if (!me) {
+    panel.innerHTML =
+      '<div class="you-head">Your itemised share</div>' +
+      '<div class="you-note">Pick your family above and every booking will be listed ' +
+      "here with your household's share of it, what you owe on it, and what is still " +
+      "due from you.</div>";
+    return panel;
+  }
+
+  const mine = rows.find(function (r) { return r.id === me; });
+  if (!mine) return null;
+
+  const nameOf = {};
+  houses.forEach(function (h) { nameOf[h.id] = h.name; });
+
+  let shareTotal = 0, dueTotal = 0, owedToMe = 0;
+  let body = "";
+
+  for (const it of counted) {
+    const share = Booking.splitItem(plan, it)[me] || 0;
+    const cost = Booking.effCost(plan, it);
+    const isEst = (it.status || "est") === "est";
+    if (share < 0.5 && it.payer !== me) continue;
+
+    shareTotal += share;
+
+    let owe = '<span class="muted">\u2014</span>';
+    let due = '<span class="muted">\u2014</span>';
+
+    if (it.payer === me) {
+      // Fronted by this household: the rest of the group owes them the balance.
+      const back = cost - share;
+      owedToMe += back;
+      if (back >= 0.5) owe = '<span class="pos">owed ' + fmtUSD(Math.round(back)) + "</span>";
+    } else if (it.payer && nameOf[it.payer]) {
+      owe = '<span class="neg">owe ' + escapeHTML(nameOf[it.payer]) + "</span>";
+      due = fmtUSD(Math.round(share)) +
+        '<span class="due-to">to ' + escapeHTML(nameOf[it.payer]) + "</span>";
+      dueTotal += share;
+    } else if (!isEst) {
+      // Booked and confirmed, but nobody has fronted it: still owed to whoever
+      // provided it, which is a different kind of debt from owing a family.
+      due = fmtUSD(Math.round(share)) +
+        '<span class="due-to">to ' + escapeHTML(it.vendor || "the vendor") + "</span>";
+      dueTotal += share;
+    } else {
+      due = '<span class="muted">not booked</span>';
+    }
+
+    body += "<tr><td>" + escapeHTML(it.title || "") +
+      (isEst ? '<span class="li-est">estimate</span>' : "") + "</td>" +
+      '<td class="n">' + fmtUSD(Math.round(share)) + "</td>" +
+      '<td class="n">' + owe + "</td>" +
+      '<td class="n">' + due + "</td></tr>";
+  }
+
+  // The gift, on the same footing as the lines above it.
   const baseOwes = {};
   rows.forEach(function (r) { baseOwes[r.id] = r.owes; });
   const alloc = giftAllocation(baseOwes);
-  const giftOn = !!planGift();
+  const g = planGift();
+  const myCredit = alloc.credit[me] || 0;
 
-  let html = '<div class="you-head">Everyone\u2019s share</div>';
-  html += '<div class="ledger-scroll"><table class="v-ledger' + (giftOn ? " has-gift" : "") + '"><thead><tr>' +
-    "<th>Household</th><th>Share of trip</th>" +
-    (giftOn ? "<th>Gift</th><th>After gift</th>" : "") +
-    "<th>Paid so far</th><th>Owes the group</th></tr></thead><tbody>";
+  let foot =
+    '<tr class="li-total"><td>Your share of the trip</td>' +
+    '<td class="n">' + fmtUSD(Math.round(shareTotal)) + "</td>" +
+    '<td class="n"></td><td class="n">' + fmtUSD(Math.round(dueTotal)) + "</td></tr>";
 
-  for (const r of rows) {
-    const net = Math.round(r.net);
-    const cls = net > 0 ? "pos" : net < 0 ? "neg" : "";
-    const netText = net === 0 ? "even" : net > 0 ? `owed ${fmtUSD(net)}` : `owes ${fmtUSD(-net)}`;
-    const credited = alloc.credit[r.id] || 0;
-    const after = Math.max(0, r.owes - credited);
-
-    html += `<tr${r.id === me ? ' class="is-me"' : ""}><td>${escapeHTML(r.name)}</td>` +
-      `<td>${fmtUSD(Math.round(r.owes))}</td>` +
-      (giftOn
-        ? `<td class="gift-col">${credited > 0.5 ? "\u2212" + fmtUSD(Math.round(credited)) : "\u2014"}</td>` +
-          `<td class="after-col">${fmtUSD(Math.round(after))}</td>`
-        : "") +
-      `<td>${fmtUSD(Math.round(r.paid))}</td>` +
-      `<td class="net ${cls}">${netText}</td></tr>`;
-  }
-  html += "</tbody></table></div>";
-
-  if (giftOn) {
-    const giver = giverName(planGift());
-    html += '<div class="you-note">The gift covers ' +
-      escapeHTML(housePossessive(giver) || "the giving household\u2019s") +
-      " own share first, and what is left is divided evenly between the other " +
-      (rows.length - 1) + " families." +
-      (alloc.unused > 0.5
-        ? " <strong>" + fmtUSD(Math.round(alloc.unused)) +
-          "</strong> of it is more than the trip costs, so it is not applied to anyone."
-        : "") +
-      "</div>";
+  if (g && myCredit >= 0.5) {
+    foot +=
+      '<tr class="gift-line"><td>' +
+      escapeHTML(g.from === me ? "Your gift, against your own share"
+                               : "Gift from " + (houseLabel(giverName(g)) || "the family")) +
+      "</td>" +
+      '<td class="n">\u2212' + fmtUSD(Math.round(myCredit)) + "</td>" +
+      '<td class="n"></td><td class="n"><span class="muted">\u2014</span></td></tr>' +
+      '<tr class="li-after"><td>Your share after the gift</td>' +
+      '<td class="n">' + fmtUSD(Math.round(Math.max(0, shareTotal - myCredit))) + "</td>" +
+      '<td class="n"></td><td class="n"></td></tr>';
   }
 
-  const transfers = Booking.settle(rows);
+  let html =
+    '<div class="you-head">Your itemised share \u2014 ' + escapeHTML(nameOf[me] || "") + "</div>" +
+    '<div class="ledger-scroll"><table class="v-items"><thead><tr>' +
+    "<th>Item</th><th class=\"n\">Your share</th><th class=\"n\">Owe / owed</th>" +
+    "<th class=\"n\">Still due</th></tr></thead><tbody>" +
+    body + foot + "</tbody></table></div>";
+
+  if (owedToMe >= 0.5) {
+    html += '<div class="you-note">You have fronted <strong>' + fmtUSD(Math.round(mine.paid)) +
+      "</strong> of the trip, so <strong>" + fmtUSD(Math.round(owedToMe)) +
+      "</strong> of what is above is owed back to you rather than paid by you.</div>";
+  }
+
+  if (g && myCredit >= 0.5) {
+    html += '<div class="you-note">The gift lowers your share, but not the Still due ' +
+      "column: that money has not been handed over yet. When it is, record it and " +
+      "what you owe will drop.</div>";
+  }
+
+  // Only the transfers this household is part of. The rest of the group settling
+  // between themselves is not this panel's business any more.
+  const transfers = Booking.settle(rows).filter(function (t) {
+    return t.fromId === me || t.toId === me;
+  });
+  const others = Booking.settle(rows).length - transfers.length;
+
   if (transfers.length) {
-    html += '<div class="you-head" style="margin-top:14px;">Settling up</div><ul class="settle">';
+    html += '<div class="you-head" style="margin-top:16px;">Settling up</div><ul class="settle">';
     for (const t of transfers) {
-      const mineFlag = t.fromId === me || t.toId === me;
-      html += `<li${mineFlag ? ' class="is-me"' : ""}><strong>${escapeHTML(t.from)}</strong> pays <strong>${escapeHTML(t.to)}</strong> <span class="amt">${fmtUSD(Math.round(t.amount))}</span></li>`;
+      html += '<li class="is-me"><strong>' + escapeHTML(t.from) + "</strong> pays <strong>" +
+        escapeHTML(t.to) + '</strong> <span class="amt">' + fmtUSD(Math.round(t.amount)) +
+        "</span></li>";
     }
     html += "</ul>";
-  }
-  // Without this, the two halves of the panel look like they contradict each other:
-  // a family's share of the trip has dropped because of the gift, while the transfer
-  // below has not moved an inch. Both are right, for different reasons, and the only
-  // way to know that is to be told.
-  // The settling-up is the one place the gift deliberately does NOT reach, and that
-  // needs saying: "After gift" above and "owes the group" below are different
-  // questions, and without this they read as a contradiction.
-  const giftNow = planGift();
-  if (giftNow) {
-    html += '<div class="you-note">Settling up is separate from the gift. It only ' +
-      "moves money people have actually laid out for each other, and no gift money " +
-      "has changed hands yet — so these transfers are unchanged. When it does " +
-      "change hands, record it as a payment and they will drop.</div>";
+    if (others > 0) {
+      html += '<div class="you-note">' + others +
+        (others === 1 ? " other transfer settles" : " other transfers settle") +
+        " between the rest of the group.</div>";
+    }
   }
 
-  if (owedToVendors >= 1) {
-    html += `<div class="you-note"><strong>${fmtUSD(Math.round(owedToVendors))}</strong> of the trip hasn\u2019t been paid by anyone yet, so it isn\u2019t in the settling-up above \u2014 that money is still owed to airlines, hosts and parks.</div>`;
-  }
   panel.innerHTML = html;
-
-  const pays = buildPaymentsSection();
-  if (pays) panel.appendChild(pays);
   return panel;
 }
 
