@@ -560,6 +560,19 @@
 
 
 
+
+    .you-body .you-sub { font-size: 0.78rem; color: var(--muted); line-height: 1.5;
+      margin: -4px 0 10px; }
+    /* The gift inside "Your share": green for what comes off, and the line beneath
+       it ruled and bold, because it is the figure that actually matters to you. */
+    .you-body .total-row.gift-line .label,
+    .you-body .total-row.gift-line .val { color: #1a7a4a; font-weight: 600; }
+    .you-body .total-row.after-line { border-top: 1px solid var(--border); padding-top: 6px; margin-top: 2px; }
+    .you-body .total-row.after-line .label,
+    .you-body .total-row.after-line .val { font-weight: 700; }
+    .you-lines tr.gift-line td { color: #1a7a4a; font-weight: 600; }
+    .you-lines tr.after-line td { border-top: 1px solid var(--border); font-weight: 700; }
+
     /* The gift's own columns in the share table. Green for what comes off, so the
        subtraction is readable at a glance rather than needing the minus sign. */
     .v-ledger .gift-col { color: #1a7a4a; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -891,6 +904,6 @@
   <script src="config.js?v=3"></script>
   <script src="backend.js?v=2"></script>
   <script src="booking.js?v=6"></script>
-  <script src="group.js?v=24"></script>
+  <script src="group.js?v=25"></script>
 </body>
 </html>

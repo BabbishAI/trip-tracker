@@ -581,11 +581,34 @@ function buildYouPanel() {
       ? `The group owes you ${fmtUSD(net)}.`
       : `You owe the group ${fmtUSD(-net)}.`;
 
+  // The same subtraction the group table shows, for the one household reading it.
+  // Seeing "your share" without the gift in it, while the table below shows it
+  // applied, is the sort of small inconsistency that makes people distrust the lot.
+  const myBase = {};
+  rows.forEach(function (r) { myBase[r.id] = r.owes; });
+  const myAlloc = giftAllocation(myBase);
+  const myCredit = myAlloc.credit[me] || 0;
+  const myAfter = Math.max(0, mine.owes - myCredit);
+  const giftHere = planGift();
+
   const body = document.createElement("div");
   body.className = "you-body";
   body.innerHTML =
     `<div class="you-big ${net < 0 ? "neg" : net > 0 ? "pos" : ""}">${netText}</div>` +
+    // The headline is about money other families have already laid out; the rows
+    // below are about the share of the trip. With a gift in play those two numbers
+    // pull apart hard, and the headline is the loudest thing on the panel.
+    (giftHere && myCredit >= 0.5 && Math.abs(net) >= 1
+      ? `<div class="you-sub">That is what other families have already laid out for you — ` +
+        `the gift below has not been handed over yet, so it has not reached this figure.</div>`
+      : "") +
     `<div class="total-row"><span class="label">Your share of the trip</span><span class="val">${fmtUSD(Math.round(mine.owes))}</span></div>` +
+    (giftHere && myCredit >= 0.5
+      ? `<div class="total-row gift-line"><span class="label">${escapeHTML(giftHere.from === me ? "Your gift, against your own share" : "Gift from the " + (giverName(giftHere) || "family"))}</span>` +
+        `<span class="val">−${fmtUSD(Math.round(myCredit))}</span></div>` +
+        `<div class="total-row after-line"><span class="label">Your share after the gift</span>` +
+        `<span class="val">${fmtUSD(Math.round(myAfter))}</span></div>`
+      : "") +
     `<div class="total-row"><span class="label">You've already paid</span><span class="val">${fmtUSD(Math.round(mine.paid))}</span></div>`;
   if (mine.sent >= 1 || mine.received >= 1) {
     let extra = "";
@@ -603,6 +626,14 @@ function buildYouPanel() {
     let html = '<table class="you-lines"><tbody>';
     for (const r of lines) {
       html += `<tr><td>${escapeHTML(r.it.title)}</td><td class="amt">${fmtUSD(Math.round(r.amt))}</td></tr>`;
+    }
+    // The breakdown has to end where the summary above ends, or it stops being a
+    // breakdown of anything.
+    if (giftHere && myCredit >= 0.5) {
+      html += `<tr class="gift-line"><td>${escapeHTML(giftHere.from === me ? "Your gift, against your own share" : "Gift from the " + (giverName(giftHere) || "family"))}</td>` +
+        `<td class="amt">−${fmtUSD(Math.round(myCredit))}</td></tr>`;
+      html += `<tr class="after-line"><td>Your share after the gift</td>` +
+        `<td class="amt">${fmtUSD(Math.round(myAfter))}</td></tr>`;
     }
     html += "</tbody></table>";
     const det = document.createElement("details");
