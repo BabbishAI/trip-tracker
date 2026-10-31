@@ -683,6 +683,21 @@ function buildLedgerPanel() {
   let shareTotal = 0, dueTotal = 0, owedToMe = 0;
   let body = "";
 
+  // A repayment is recorded household-to-household, not against a particular
+  // booking \u2014 somebody hands over one sum covering several lines at once. So the
+  // money this household has already sent to each other household is spread across
+  // the lines it owes them, in the order they appear, and those lines then read as
+  // settled instead of still demanding payment.
+  //
+  // Without this the panel contradicted itself out loud: the headline said "You're
+  // square with the group" while every flight line underneath still said money was
+  // due to the family who had already been paid.
+  const sentTo = {};
+  Booking.payments(plan).forEach(function (p) {
+    if (p.from !== me) return;
+    sentTo[p.to] = (sentTo[p.to] || 0) + Booking.paymentAmount(p);
+  });
+
   for (const it of counted) {
     const share = Booking.splitItem(plan, it)[me] || 0;
     const cost = Booking.effCost(plan, it);
@@ -700,10 +715,19 @@ function buildLedgerPanel() {
       owedToMe += back;
       if (back >= 0.5) owe = '<span class="pos">owed ' + fmtUSD(Math.round(back)) + "</span>";
     } else if (it.payer && nameOf[it.payer]) {
+      const covered = Math.min(share, sentTo[it.payer] || 0);
+      sentTo[it.payer] = (sentTo[it.payer] || 0) - covered;
+      const left = share - covered;
+
       owe = '<span class="neg">owe ' + escapeHTML(nameOf[it.payer]) + "</span>";
-      due = fmtUSD(Math.round(share)) +
-        '<span class="due-to">to ' + escapeHTML(nameOf[it.payer]) + "</span>";
-      dueTotal += share;
+      if (left < 0.5) {
+        owe = '<span class="pos">settled</span>';
+        due = '<span class="paid-tick">paid</span>';
+      } else {
+        due = fmtUSD(Math.round(left)) +
+          '<span class="due-to">to ' + escapeHTML(nameOf[it.payer]) + "</span>";
+        dueTotal += left;
+      }
     } else if (!isEst) {
       // Booked and confirmed, but nobody has fronted it: still owed to whoever
       // provided it, which is a different kind of debt from owing a family.
@@ -759,6 +783,18 @@ function buildLedgerPanel() {
       "</strong> of what is above is owed back to you rather than paid by you.</div>";
   }
 
+  // "Where do I say I have paid this?" was a fair question with no answer on the page.
+  // There are two different answers depending on who the money went to, and neither
+  // was discoverable from the panel showing what you owe.
+  if (dueTotal >= 0.5) {
+    html += '<div class="you-note paid-how"><strong>Paid something already?</strong><br>' +
+      "If you paid another family back, record it under <em>Money already paid back</em> " +
+      "and these lines will settle. If you paid a hotel, hire company or park yourself, " +
+      "open that booking on the Trip tab and set <em>who paid</em> to your household — " +
+      "then the rest of the group will owe you their share of it instead." +
+      '<button type="button" class="jump-pay">Record a payment</button></div>';
+  }
+
   if (g && myCredit >= 0.5) {
     html += '<div class="you-note">The gift lowers your share, but not the Still due ' +
       "column: that money has not been handed over yet. When it is, record it and " +
@@ -788,6 +824,32 @@ function buildLedgerPanel() {
   }
 
   panel.innerHTML = html;
+
+  // Recording a repayment lives here, at the bottom of the bill it settles.
+  //
+  // This was lost for one release: it used to hang off the end of the old totals
+  // panel, and rewriting that panel wholesale dropped the call without anything
+  // failing — the section simply stopped existing, taking the only way to record a
+  // payment with it. Appended rather than built into the markup above so there is a
+  // single place it attaches.
+  const pays = buildPaymentsSection();
+  if (pays) panel.appendChild(pays);
+
+  // Takes you to the form rather than telling you where it is. The payments section
+  // is a collapsed <details> further down the panel, which is exactly the sort of
+  // thing someone gives up looking for.
+  const jump = panel.querySelector(".jump-pay");
+  if (jump) {
+    jump.addEventListener("click", function () {
+      const box = document.querySelector(".pay-add");
+      if (!box) return;
+      box.open = true;
+      box.scrollIntoView({ block: "center" });
+      const first = box.querySelector("select, input");
+      if (first) first.focus();
+    });
+  }
+
   return panel;
 }
 
